@@ -32,7 +32,7 @@ pub async fn start(
     tx: oneshot::Sender<bool>,
     channels: NetSideChannels,
 ) {
-    let incoming = match setup::make_server_endpoint(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 29477)) {//"65.108.78.237:29477") {
+    let incoming = match setup::make_server_endpoint("0.0.0.0:29477".parse().unwrap()) {//"65.108.78.237:29477") {
         Ok(incoming) => incoming,
         Err(e) => {
             println!("Failed to create server endpoint! Error: {}", e);

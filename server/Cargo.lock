@@ -307,7 +307,7 @@ dependencies = [
 [[package]]
 name = "quinn"
 version = "0.8.0"
-source = "git+https://github.com/quinn-rs/quinn#18f00de385b0edf49c3fcc169800c80d5dd3abf6"
+source = "git+https://github.com/quinn-rs/quinn#f7203ee382f6ac91456e155d380c0d7cccaf8e66"
 dependencies = [
  "bytes",
  "quinn-proto",
@@ -323,7 +323,7 @@ dependencies = [
 [[package]]
 name = "quinn-proto"
 version = "0.8.0"
-source = "git+https://github.com/quinn-rs/quinn#18f00de385b0edf49c3fcc169800c80d5dd3abf6"
+source = "git+https://github.com/quinn-rs/quinn#f7203ee382f6ac91456e155d380c0d7cccaf8e66"
 dependencies = [
  "bytes",
  "rand",
@@ -341,12 +341,13 @@ dependencies = [
 [[package]]
 name = "quinn-udp"
 version = "0.2.0"
-source = "git+https://github.com/quinn-rs/quinn#18f00de385b0edf49c3fcc169800c80d5dd3abf6"
+source = "git+https://github.com/quinn-rs/quinn#f7203ee382f6ac91456e155d380c0d7cccaf8e66"
 dependencies = [
  "libc",
  "quinn-proto",
  "socket2",
  "tracing",
+ "windows-sys",
 ]
 
 [[package]]

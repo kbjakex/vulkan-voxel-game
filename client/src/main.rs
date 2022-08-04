@@ -1,7 +1,6 @@
 pub mod assets;
 pub mod camera;
 pub mod chat;
-pub mod core_systems;
 pub mod entities;
 pub mod game;
 pub mod input;

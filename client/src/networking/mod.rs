@@ -12,8 +12,6 @@ use self::network_thread::NetSideChannels;
 pub mod connection;
 mod login;
 mod network_thread;
-pub mod state_sync;
-pub mod interpolation;
 
 pub struct EntityState {
     pub id: NetworkId,

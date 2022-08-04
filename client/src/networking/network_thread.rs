@@ -45,6 +45,7 @@ async fn start_inner(
     let (_endpoint, mut new_conn, response) = match try_connect(server_address, &username).await {
         Ok(tuple) => tuple,
         Err(e) => {
+            println!("Connection failed: {e}");
             on_connect.send(Err(format!("Connection failed: {e}").into_boxed_str()));
             //Chat::write(format!("Connection failed! Reason: {}", e), 0xFF_22_22_FF);
             return Ok(());

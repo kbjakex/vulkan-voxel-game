@@ -7,4 +7,3 @@ pub mod renderer;
 pub mod framebuffers;
 pub mod wrappers;
 pub mod pipelines;
-pub mod ui;
