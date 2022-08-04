@@ -1,0 +1,28 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.59"
+crossbeam-channel = "0.5.6"
+smallvec = "1.9.0"
+glam = "0.21.3"
+lz4 = "1.23.3"
+flexstr = "0.9.2"
+ctrlc = "3.2.2"
+
+hecs = { git = "https://github.com/Ralith/hecs" }
+bevy_utils = "0.8.0"
+
+quinn = { git = "https://github.com/quinn-rs/quinn" }
+tokio = { version = "1.20.1", features = ["rt", "macros", "sync"] }
+rcgen = "0.9.3"
+rustls = { version = "0.20.6", default-features = false, features = ["dangerous_configuration", "quic"] }
+
+shared = { path = "../shared" }
+
+#bin_io = { path = "../../libs/bin_io" }
+#noise = { path = "../../libs/noise" }

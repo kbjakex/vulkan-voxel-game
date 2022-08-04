@@ -1,0 +1,18 @@
+<blocks>
+    <block id="0" file="diamond_block.png"></block>
+    <block id="1" file="diamond_ore.png"></block>
+    <block id="2" file="emerald_block.png"></block>
+    <block id="3" file="pink_wool.png"></block>
+    <block id="4" file="polished_granite.png"></block>
+    <block id="5" file="redstone_block.png"></block>
+    <block id="6" file="redstone_lamp.png"></block>
+    <block id="7" file="sand.png"></block>
+    <block id="8" file="shroomlight.png"></block>
+    <block id="9" file="slime_block.png"></block>
+    <block id="10" file="soul_sand.png"></block>
+    <block id="11" file="spruce_planks.png"></block>
+    <block id="12" file="stone_bricks.png"></block>
+    <block id="13" file="stone.png"></block>
+    <block id="14" file="tnt_side.png"></block>
+    <block id="15" file="tube_coral_block.png"></block>
+</blocks>
