@@ -65,12 +65,17 @@ impl From<WorldBlockPos> for ChunkBlockPos {
 }
 
 pub struct Chunk {
-    blocks: [Block; CHUNK_VOLUME]
+    blocks: [Block; CHUNK_VOLUME],
+    pub dirty: bool,
+    // Id of the 2³ chunk group this chunk belongs to
+    pub group_id: thunderdome::Index,
+
+    pub neighbor_indices: [u32; 6]
 }
 
 impl Chunk {
-    pub fn new() -> Box<Self> {
-        let boxed = unsafe {
+    pub fn new(group_id: thunderdome::Index, neighbor_indices: [u32; 6]) -> Box<Self> {
+        let mut boxed = unsafe {
             let layout = std::alloc::Layout::new::<Chunk>();
             let mem = std::alloc::alloc_zeroed(layout);
             if mem.is_null() {
@@ -78,11 +83,13 @@ impl Chunk {
             }
             Box::from_raw(mem.cast::<Chunk>())
         };
+        boxed.group_id = group_id; // TODO probably UB to do this here instead of before mem.cast()
+        boxed.neighbor_indices = neighbor_indices;
 
         // For some reason, the compiler does not optimize the memset away,
         // even though Block is made of zero bytes and the memory is already
         // zero-initialized.
-        const _: () = assert!(Block::new(BlockId::AIR).raw() == 0, "Chunk::new(): air block no longer zero, needs memset");
+        const _: () = assert!(Block::AIR.raw() == 0, "Chunk::new(): air block no longer zero, needs memset");
         // boxed.blocks.fill(Block::new(BlockId::AIR));
 
         boxed

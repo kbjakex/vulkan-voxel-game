@@ -1,3 +1,16 @@
+
+pub struct BlockData(u16);
+
+impl BlockData {
+    const COMPLEX_MASK : u16 = 1 << 15; // MSB
+    
+    // Complex blocks use first 15 bits as an index to a separate table of blocks, because
+    // one complex block consists of 8 blocks
+    pub fn is_complex(self) -> bool {
+        (self.0 & Self::COMPLEX_MASK) != 0
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct BlockId(u16);
 
@@ -25,9 +38,18 @@ impl Block {
         self.0
     }
 
-    pub const fn id(self) -> BlockId {
-        BlockId(self.0 & 0x3FF)
+    pub const fn data(self) -> BlockData {
+        BlockData(self.0 >> 10)
     }
+
+    pub const fn id(self) -> BlockId {
+        BlockId(self.0 & ((1 << 10) - 1))
+    }
+}
+
+impl Block {
+    pub const AIR : Block = Block::new(BlockId::AIR);
+    pub const STONE : Block = Block::new(BlockId::STONE);
 }
 
 impl From<Block> for BlockId {

@@ -6,6 +6,7 @@ use erupt::vk::{self, BufferUsageFlags};
 use flexstr::SharedStr;
 use glam::{Mat4, Vec2, Vec3};
 use shared::{bits_and_bytes::BitWriter, protocol::s2c::login::LoginResponse};
+use thunderdome::Arena;
 use vkcore::{Buffer, BufferAllocation, UsageFlags, VkContext};
 use winit::event::{DeviceEvent, ElementState, Event, KeyboardInput, WindowEvent};
 
@@ -23,7 +24,7 @@ use crate::{
         core::{WindowSize, Time},
         game_state,
         Resources,
-    }, world::{dimension::{ECS, Chunks}, chunk::WorldBlockPosExt},
+    }, world::{dimension::{ECS, Chunks}, chunk::WorldBlockPosExt, chunk_renderer::ChunkRenderer},
 };
 
 use self::input_recorder::InputRecorder;
@@ -382,8 +383,9 @@ impl GameState {
                 camera: Camera::new(login.position, res.window_size.xy),
                 input_recorder: InputRecorder::new(login.position, res.time.secs_f32),
                 entities: ECS::new(),
-                chunks: Chunks::new(24, login.position.as_ivec3().to_chunk_pos()),
-                the_player: ThePlayer::new(login.position)
+                chunks: Chunks::new(login.world_seed, 24, login.position.as_ivec3().to_chunk_pos()),
+                the_player: ThePlayer::new(login.position),
+                chunk_renderer: ChunkRenderer::new(),
             },
             grid_vbo: VertexBuffer {
                 buffer: Buffer::null(),

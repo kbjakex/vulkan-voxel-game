@@ -1,12 +1,9 @@
-use bevy_utils::HashMap;
-use glam::{IVec3, Quat, Vec3Swizzles, Vec3, IVec2};
+use glam::{IVec3, Vec3Swizzles, IVec2};
+use thunderdome::Arena;
 
-use crate::{
-    game::states::game::{self, GameState},
-    resources::{game_state, Resources},
-};
+use crate::resources::Resources;
 
-use super::chunk::{Chunk, CHUNK_SIZE};
+use super::{chunk::{Chunk, CHUNK_SIZE}, chunk_generator::ChunkGenerator, chunk_group::ChunkGroups};
 
 pub type ECS = hecs::World;
 pub type ChunkIndex = u32;
@@ -14,32 +11,29 @@ pub type ChunkIndex = u32;
 pub const WORLD_HEIGHT: usize = 256;
 pub const WORLD_HEIGHT_CHUNKS: usize = WORLD_HEIGHT / CHUNK_SIZE;
 
-pub struct ChunkRenderData {}
-
 pub struct Chunks {
     corner_chunk_pos: IVec2,
     chunks: Box<[Option<Box<Chunk>>]>,
-    render_data: Box<[Option<ChunkRenderData>]>,
     render_distance: u32,
+
+    groups: ChunkGroups,
+    generator: ChunkGenerator,
 }
 
 impl Chunks {
-    pub fn new(render_distance: u32, player_chunk_pos: IVec3) -> Self {
+    pub fn new(world_seed: u64, render_distance: u32, player_chunk_pos: IVec3) -> Self {
         let n = 2 * render_distance as usize;
 
         let chunks = std::iter::repeat_with(|| None::<Box<Chunk>>)
             .take(n * n * WORLD_HEIGHT_CHUNKS)
             .collect::<Box<[_]>>();
 
-        let render_data = std::iter::repeat_with(|| None::<ChunkRenderData>)
-            .take(n * n * WORLD_HEIGHT_CHUNKS)
-            .collect::<Box<[_]>>();
-
         Self {
             corner_chunk_pos: player_chunk_pos.xz() - render_distance as i32,
             chunks,
-            render_data,
-            render_distance
+            render_distance,
+            generator: ChunkGenerator::new(world_seed),
+            groups: ChunkGroups::new()
         }
     }
 
@@ -53,7 +47,6 @@ impl Chunks {
 
     pub fn remove(&mut self, index: ChunkIndex) -> Option<Box<Chunk>> {
         let chunk = std::mem::take(&mut self.chunks[index as usize]);
-        std::mem::take(&mut self.render_data[index as usize]);
         chunk
     }
 

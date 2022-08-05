@@ -1,10 +1,11 @@
-pub mod states;
 pub mod player;
+pub mod states;
 
 use std::time::Instant;
 
 use erupt::vk;
 use glam::{Vec2, Vec3};
+use rayon::{prelude::IntoParallelIterator, ThreadPoolBuilder};
 use winit::{
     dpi::{LogicalPosition, LogicalSize, PhysicalSize},
     event::{Event, WindowEvent},
@@ -22,7 +23,7 @@ use crate::{
     },
 };
 
-use self::states::{username_query::UsernameQueryState, connection_lost::ConnectionLostState};
+use self::states::{connection_lost::ConnectionLostState, username_query::UsernameQueryState};
 
 pub trait State {
     fn on_enter(&mut self, resources: &mut Resources) -> anyhow::Result<()>;
@@ -114,13 +115,15 @@ impl Game {
                 }
 
                 println!("WindowEvent::Resized({}x{})", width, height);
-                self.resources.renderer.handle_window_resize(*width, *height);
+                self.resources
+                    .renderer
+                    .handle_window_resize(*width, *height);
 
                 let size = self.resources.renderer.vk.swapchain.surface.extent;
                 self.resources.window_size = WindowSize {
                     extent: size,
                     xy: Vec2::new(size.width as f32, size.height as f32),
-                    monitor_size_px: self.resources.window_size.monitor_size_px
+                    monitor_size_px: self.resources.window_size.monitor_size_px,
                 };
 
                 if let Some(result) = self.active_state.on_event(&event, &mut self.resources) {
@@ -132,11 +135,11 @@ impl Game {
                 match &event {
                     Event::DeviceEvent { event, .. } => {
                         KeyboardUpdater::handle_key_event(event, &mut inputs.keyboard);
-                    },
+                    }
                     Event::WindowEvent { event, .. } => {
                         MouseUpdater::handle_mouse_events(event, &mut inputs.mouse);
                         KeyboardUpdater::handle_window_event(event, &mut inputs.keyboard);
-                    },
+                    }
                     _ => {}
                 }
 
@@ -166,7 +169,8 @@ impl Game {
 impl Game {
     pub fn init(event_loop: &EventLoop<()>) -> anyhow::Result<Self> {
         let fullscreen_size = event_loop.primary_monitor().unwrap().size();
-        let fullscreen_size = fullscreen_size.to_logical(event_loop.primary_monitor().unwrap().scale_factor());
+        let fullscreen_size =
+            fullscreen_size.to_logical(event_loop.primary_monitor().unwrap().scale_factor());
 
         let window_size = LogicalSize::new(400, 480);
         let window = WindowBuilder::new()
@@ -185,6 +189,9 @@ impl Game {
         let renderer = renderer::init(&window, &default_camera)?;
         //window.set_inner_size(LogicalSize::new(512, 512));
 
+        // Allocate all but one core/thread to the threadpool
+        let thread_pool_threads = std::thread::available_parallelism()?.get() - 1;
+
         let mut resources = Box::new(Resources {
             time: Time {
                 at_launch: time,
@@ -199,8 +206,12 @@ impl Game {
                     height: window_size.height,
                 },
                 xy: Vec2::new(window_size.width as f32, window_size.height as f32),
-                monitor_size_px: fullscreen_size
+                monitor_size_px: fullscreen_size,
             },
+            thread_pool: ThreadPoolBuilder::new()
+                .num_threads(thread_pool_threads)
+                .thread_name(|i| format!("Worker thread #{i}"))
+                .build()?,
             metrics: metrics::Resources {
                 frame_count: 0,
                 frame_time: metrics::FrameTime {

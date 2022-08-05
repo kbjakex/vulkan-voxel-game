@@ -3,6 +3,8 @@
 // Should preferably be imported from here for consistency and convenience,
 // although in practice there is no difference.
 
+use rayon::ThreadPool;
+
 use crate::renderer::renderer::Renderer;
 
 // The main resources struct contains resources shared between
@@ -11,6 +13,8 @@ pub struct Resources {
     pub time: core::Time,
     pub window_handle: winit::window::Window,
     pub window_size: core::WindowSize,
+
+    pub thread_pool: ThreadPool,
     
     pub metrics: metrics::Resources,
     pub renderer: Renderer,
@@ -59,7 +63,7 @@ pub mod input {
 // Resources specific to the 'game' state, aka
 // when you're actually playing and not in a menu
 pub mod game_state {
-    use crate::{game::{states::game::input_recorder::InputRecorder, player::ThePlayer}, world::dimension::{ECS, Chunks}};
+    use crate::{game::{states::game::input_recorder::InputRecorder, player::ThePlayer}, world::{dimension::{ECS, Chunks}, chunk_renderer::ChunkRenderer}};
 
     pub struct Resources {
         pub username: flexstr::SharedStr,
@@ -69,7 +73,9 @@ pub mod game_state {
         pub entities: ECS,
         pub chunks: Chunks,
         pub the_player: ThePlayer,
-        pub input_recorder: InputRecorder
+        pub input_recorder: InputRecorder,
+
+        pub chunk_renderer: ChunkRenderer,
     }
 
     pub struct Net {
