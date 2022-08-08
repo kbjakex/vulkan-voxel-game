@@ -1,4 +1,4 @@
-use std::net::{SocketAddr, Ipv4Addr};
+use std::net::SocketAddr;
 
 use anyhow::Result;
 use flexstr::SharedStr;
@@ -82,7 +82,7 @@ mod setup {
     use super::*;
 
     pub fn make_server_endpoint(bind_addr: SocketAddr) -> Result<Incoming> {
-        let (server_config, server_cert) = configure_server()?;
+        let (server_config, _) = configure_server()?;
         let (endpoint, incoming) = Endpoint::server(server_config, bind_addr)?;
 
         println!(

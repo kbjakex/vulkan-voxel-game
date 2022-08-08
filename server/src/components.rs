@@ -10,6 +10,12 @@ pub struct Position {
     pub xyz: Vec3,
 }
 
+#[derive(Clone, Copy)]
+pub struct OldPosition(pub Vec3);
+
+#[derive(Clone, Copy)]
+pub struct Facing(pub Vec3);
+
 pub mod net {
     pub type NetworkId = shared::protocol::NetworkId;
     pub type PlayerConnection = crate::net::PlayerConnection;

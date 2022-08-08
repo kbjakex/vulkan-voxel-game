@@ -5,7 +5,8 @@ use std::{ffi::c_void, time::Instant};
 use erupt::vk::{self, BufferUsageFlags};
 use flexstr::SharedStr;
 use glam::{Mat4, Vec2, Vec3};
-use shared::{bits_and_bytes::BitWriter, protocol::s2c::login::LoginResponse};
+use hecs::Entity;
+use shared::{bits_and_bytes::{BitWriter, ByteReader}, protocol::{s2c::login::LoginResponse, NetworkId}};
 use thunderdome::Arena;
 use vkcore::{Buffer, BufferAllocation, UsageFlags, VkContext};
 use winit::event::{DeviceEvent, ElementState, Event, KeyboardInput, WindowEvent};
@@ -24,7 +25,7 @@ use crate::{
         core::{WindowSize, Time},
         game_state,
         Resources,
-    }, world::{dimension::{ECS, Chunks}, chunk::WorldBlockPosExt, chunk_renderer::ChunkRenderer},
+    }, world::{dimension::{ECS, Chunks}, chunk::WorldBlockPosExt, chunk_renderer::ChunkRenderer}, components::Position,
 };
 
 use self::input_recorder::InputRecorder;
@@ -34,6 +35,7 @@ use super::connection_lost::ConnectionLostState;
 pub struct GameState {
     pub res: game_state::Resources,
     grid_vbo: VertexBuffer,
+    cube_vbo: VertexBuffer,
 }
 
 impl State for GameState {
@@ -56,6 +58,8 @@ impl State for GameState {
             .flush_staged(&res.renderer.vk.device)?;
 
         dbg![res.input.keyboard.is_in_text_input_mode()];
+
+        self.cube_vbo = create_debug_cube(&mut res.renderer.vk)?;
 
         Ok(())
     }
@@ -82,6 +86,11 @@ impl State for GameState {
             &res.window_handle,
             res.time.secs_f32,
         );
+
+        res.renderer.ui.draw_text(&format!("FPS: {:.4}", res.metrics.frame_time.avg_fps), 30, res.window_size.extent.height as u16 - 60);
+        res.renderer.ui.draw_text(&format!("X: {:.4}", self.res.camera.pos().x), 30, res.window_size.extent.height as u16 - 90);
+        res.renderer.ui.draw_text(&format!("Y: {:.4}", self.res.camera.pos().y), 30, res.window_size.extent.height as u16 - 120);
+        res.renderer.ui.draw_text(&format!("Z: {:.4}", self.res.camera.pos().z), 30, res.window_size.extent.height as u16 - 150);
 
         if let Err(e) = self.render(res) {
             eprintln!("render() error: {e}");
@@ -151,6 +160,49 @@ impl GameState {
             net.next_network_tick = (net.network_tick_count as f64 * shared::TICK_DURATION.as_secs_f64()) as f32;
             self.send_stuff_to_server(res, t);
         }
+
+        let net = &mut self.res.net;
+        if let Some(channels) = net.connection.channels() {
+            let ecs = &mut self.res.entities;
+
+            while let Ok(mut bytes) = channels.entity_state_recv.try_recv() {
+                let mut reader = ByteReader::new(&mut bytes);
+                while reader.bytes_remaining() > 0 {
+                    let id = NetworkId::from_raw(reader.read_u16());
+                    let velocity = Vec3::new(
+                        reader.read_f32(),
+                        reader.read_f32(),
+                        reader.read_f32()
+                    );
+
+                    if id == net.nid {
+                        // bleh
+                    } else {
+                        if net.nid_to_entity_mapping.len() < id.raw() as usize {
+                            net.nid_to_entity_mapping.resize(id.raw() as usize + 1, (NetworkId::from_raw(0), Entity::DANGLING));
+                        }
+
+                        let (check_id, mut entity) = net.nid_to_entity_mapping[id.raw() as usize];
+                        if check_id != id {
+                            if entity != Entity::DANGLING {
+                                let _ = ecs.despawn(entity); // bad
+                            }
+
+                            // New entity then. TODO: add a proper way to spawn entities and make this an error
+                            entity = ecs.spawn((id, Position(Vec3::ZERO)));
+                            net.nid_to_entity_mapping[id.raw() as usize] = (id, entity);
+
+                            println!("Spawned entity with id {id:?}");
+                        }
+
+                        ecs.get::<&mut Position>(entity).unwrap().0 += velocity;
+
+                        let p = ecs.get::<&mut Position>(entity).unwrap().0;
+                        //println!("Entity {id:?} is now at position {p}");
+                    }
+                }
+            }
+        }
     }
 
     fn send_stuff_to_server(&mut self, res: &mut Resources, network_tick_time_secs: f32) {
@@ -162,11 +214,12 @@ impl GameState {
             .integrator
             .end_network_tick(res.time.secs_f32, network_tick_time_secs);
 
+        print!("net: ");
         self.res.camera.move_to(self.res.input_recorder.integrator.pos);
 
         let pos = self.res.camera.pos();
         if velocity.length() > f32::EPSILON {
-            self.res.chat.add_chat_entry(None, format!("{:.8}, {:.8}, {:.8}", pos.x, pos.y, pos.z), TextColor::default(), res.time.secs_f32);
+            //self.res.chat.add_chat_entry(None, format!("{:.8}, {:.8}, {:.8}", pos.x, pos.y, pos.z), TextColor::default(), res.time.secs_f32);
         }
 
         //dbg![velocity];
@@ -223,6 +276,7 @@ impl GameState {
             res.time.secs_f32,
         );
 
+        print!("update_camera(): ");
         camera.move_to(pos);
         camera.update();
     }
@@ -290,6 +344,27 @@ impl GameState {
                 );
                 vk.device
                     .cmd_draw(ctx.commands, self.grid_vbo.vertex_count, 1, 0, 0);
+
+                vk.device.cmd_bind_vertex_buffers(
+                    ctx.commands,
+                    0,
+                    &[self.cube_vbo.buffer.handle],
+                    &[0],
+                );
+                self.res.entities.query::<&Position>().iter().for_each(|(_, pos)| {
+                    let pv = self.res.camera.proj_view_matrix() * Mat4::from_translation(pos.0);
+                    let pvm_ptr = &pv as *const Mat4 as *const c_void;
+                    vk.device.cmd_push_constants(
+                        ctx.commands,
+                        renderer.state.pipelines.terrain.layout,
+                        vk::ShaderStageFlags::VERTEX,
+                        0,
+                        std::mem::size_of::<Mat4>() as u32,
+                        pvm_ptr,
+                    );
+                    vk.device
+                        .cmd_draw(ctx.commands, self.grid_vbo.vertex_count, 1, 0, 0);
+                });
             },
         );
 
@@ -376,9 +451,11 @@ impl GameState {
                 username,
                 chat: Chat::new(res.window_size.extent.width as _),
                 net: game_state::Net {
+                    nid: login.network_id,
                     connection,
                     network_tick_count: 0,
                     next_network_tick: shared::TICK_DURATION.as_secs_f32(),
+                    nid_to_entity_mapping: Vec::with_capacity(512)
                 },
                 camera: Camera::new(login.position, res.window_size.xy),
                 input_recorder: InputRecorder::new(login.position, res.time.secs_f32),
@@ -391,6 +468,7 @@ impl GameState {
                 buffer: Buffer::null(),
                 vertex_count: 0,
             },
+            cube_vbo: VertexBuffer { buffer: Buffer::null(), vertex_count: 0 }
         }
     }
 }
@@ -434,6 +512,59 @@ fn create_debug_grid(vk: &mut VkContext) -> anyhow::Result<VertexBuffer> {
             });
         }
     }
+
+    let mut buffer = vk.allocator.allocate_buffer(
+        &vk.device,
+        &BufferAllocation {
+            size: vertices.len() * std::mem::size_of::<Vertex>(),
+            usage: UsageFlags::FAST_DEVICE_ACCESS,
+            vk_usage: BufferUsageFlags::VERTEX_BUFFER,
+        },
+    )?;
+
+    vk.uploader
+        .upload_to_buffer(&vk.device, &vertices[..], &mut buffer, 0)?;
+
+    Ok(VertexBuffer {
+        buffer,
+        vertex_count: vertices.len() as u32,
+    })
+}
+
+fn create_debug_cube(vk: &mut VkContext) -> anyhow::Result<VertexBuffer> {
+    let mut vertices: Vec<Vertex> = Vec::new();
+
+    vertices.push(Vertex {
+        pos: Vec3::new(-0.5, 0.0, -0.5),
+        col: Vec3::ZERO,
+        uv: Vec2::ZERO,
+    });
+    vertices.push(Vertex {
+        pos: Vec3::new(-0.5, 0.0, -0.5 + 1.0),
+        col: Vec3::ZERO,
+        uv: Vec2::ZERO
+    });
+    vertices.push(Vertex {
+        pos: Vec3::new(-0.5 + 1.0, 0.0, -0.5),
+        col: Vec3::ZERO,
+        uv: Vec2::ZERO
+    });
+
+    vertices.push(Vertex {
+        pos: Vec3::new(-0.5 + 1.0, 0.0, -0.5),
+        col: Vec3::ZERO,
+        uv: Vec2::ZERO
+    });
+    vertices.push(Vertex {
+        pos: Vec3::new(-0.5, 0.0, -0.5 + 1.0),
+        col: Vec3::ZERO,
+        uv: Vec2::ZERO
+    });
+    vertices.push(Vertex {
+        pos: Vec3::new(-0.5 + 1.0, 0.0, -0.5 + 1.0),
+        col: Vec3::ZERO,
+        uv: Vec2::ZERO
+    });
 
     let mut buffer = vk.allocator.allocate_buffer(
         &vk.device,

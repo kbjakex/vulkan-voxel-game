@@ -110,7 +110,7 @@ impl PositionIntegrator {
 
         self.pos = self.origin;
 
-        //println!("t: {time_secs:.8}, Mag: {:.8}, overflow: {:.8}", final_accum.length(), new_accum.length());
+        println!("t: {time_secs:.8}, Mag: {:.8}, overflow: {:.8}", final_accum.length(), new_accum.length());
 
         final_accum
     }

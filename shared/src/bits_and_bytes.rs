@@ -74,7 +74,7 @@ impl<'a> ByteReader<'a> {
     pub fn read_u8(&mut self) -> u8 {
         let p = self.pos;
         self.pos += 1;
-        u8::from_be_bytes(unsafe {[
+        u8::from_le_bytes(unsafe {[
             *self.src.get_unchecked(p)
         ]})
     }
@@ -82,7 +82,7 @@ impl<'a> ByteReader<'a> {
     pub fn read_u16(&mut self) -> u16 {
         let p = self.pos;
         self.pos += 2;
-        u16::from_be_bytes(unsafe {[
+        u16::from_le_bytes(unsafe {[
             *self.src.get_unchecked(p),
             *self.src.get_unchecked(p + 1)
         ]})
@@ -91,7 +91,7 @@ impl<'a> ByteReader<'a> {
     pub fn read_u32(&mut self) -> u32 {
         let p = self.pos;
         self.pos += 4;
-        u32::from_be_bytes(unsafe {[
+        u32::from_le_bytes(unsafe {[
             *self.src.get_unchecked(p),
             *self.src.get_unchecked(p + 1),
             *self.src.get_unchecked(p + 2),
@@ -102,7 +102,7 @@ impl<'a> ByteReader<'a> {
     pub fn read_u64(&mut self) -> u64 {
         let p = self.pos;
         self.pos += 8;
-        u64::from_be_bytes(unsafe {[
+        u64::from_le_bytes(unsafe {[
             *self.src.get_unchecked(p),
             *self.src.get_unchecked(p + 1),
             *self.src.get_unchecked(p + 2),
@@ -117,7 +117,7 @@ impl<'a> ByteReader<'a> {
     pub fn read_i8(&mut self) -> i8 {
         let p = self.pos;
         self.pos += 1;
-        i8::from_be_bytes(unsafe {[
+        i8::from_le_bytes(unsafe {[
             *self.src.get_unchecked(p)
         ]})
     }
@@ -125,7 +125,7 @@ impl<'a> ByteReader<'a> {
     pub fn read_i16(&mut self) -> i16 {
         let p = self.pos;
         self.pos += 2;
-        i16::from_be_bytes(unsafe {[
+        i16::from_le_bytes(unsafe {[
             *self.src.get_unchecked(p),
             *self.src.get_unchecked(p + 1)
         ]})
@@ -134,7 +134,7 @@ impl<'a> ByteReader<'a> {
     pub fn read_i32(&mut self) -> i32 {
         let p = self.pos;
         self.pos += 4;
-        i32::from_be_bytes(unsafe {[
+        i32::from_le_bytes(unsafe {[
             *self.src.get_unchecked(p),
             *self.src.get_unchecked(p + 1),
             *self.src.get_unchecked(p + 2),
@@ -145,7 +145,7 @@ impl<'a> ByteReader<'a> {
     pub fn read_i64(&mut self) -> i64 {
         let p = self.pos;
         self.pos += 8;
-        i64::from_be_bytes(unsafe {[
+        i64::from_le_bytes(unsafe {[
             *self.src.get_unchecked(p),
             *self.src.get_unchecked(p + 1),
             *self.src.get_unchecked(p + 2),
@@ -209,7 +209,7 @@ impl<'a> ByteWriter<'a> {
     pub fn write_u8(&mut self, x: u8) {
         debug_assert!(self.dst.len() - self.pos as usize >= 1);
 
-        let bytes = u8::to_be_bytes(x);
+        let bytes = u8::to_le_bytes(x);
         let p = self.pos as usize;
         self.pos += 1;
         unsafe {
@@ -220,7 +220,7 @@ impl<'a> ByteWriter<'a> {
     pub fn write_u16(&mut self, x: u16) {
         debug_assert!(self.dst.len() - self.pos as usize >= 2);
 
-        let bytes = u16::to_be_bytes(x);
+        let bytes = u16::to_le_bytes(x);
         let p = self.pos as usize;
         self.pos += 2;
         unsafe {
@@ -232,7 +232,7 @@ impl<'a> ByteWriter<'a> {
     pub fn write_u32(&mut self, x: u32) {
         debug_assert!(self.dst.len() - self.pos as usize >= 4);
 
-        let bytes = u32::to_be_bytes(x);
+        let bytes = u32::to_le_bytes(x);
         let p = self.pos as usize;
         self.pos += 4;
         unsafe {
@@ -246,7 +246,7 @@ impl<'a> ByteWriter<'a> {
     pub fn write_u64(&mut self, x: u64) {
         debug_assert!(self.dst.len() - self.pos as usize >= 8);
 
-        let bytes = u64::to_be_bytes(x);
+        let bytes = u64::to_le_bytes(x);
         let p = self.pos as usize;
         self.pos += 8;
         unsafe {
@@ -264,7 +264,7 @@ impl<'a> ByteWriter<'a> {
     pub fn write_i8(&mut self, x: i8) {
         debug_assert!(self.dst.len() - self.pos as usize >= 1);
 
-        let bytes = i8::to_be_bytes(x);
+        let bytes = i8::to_le_bytes(x);
         let p = self.pos as usize;
         self.pos += 1;
         unsafe {
@@ -275,7 +275,7 @@ impl<'a> ByteWriter<'a> {
     pub fn write_i16(&mut self, x: i16) {
         debug_assert!(self.dst.len() - self.pos as usize >= 2);
 
-        let bytes = i16::to_be_bytes(x);
+        let bytes = i16::to_le_bytes(x);
         let p = self.pos as usize;
         self.pos += 2;
         unsafe {
@@ -287,7 +287,7 @@ impl<'a> ByteWriter<'a> {
     pub fn write_i32(&mut self, x: i32) {
         debug_assert!(self.dst.len() - self.pos as usize >= 4);
 
-        let bytes = i32::to_be_bytes(x);
+        let bytes = i32::to_le_bytes(x);
         let p = self.pos as usize;
         self.pos += 4;
         unsafe {
@@ -301,7 +301,7 @@ impl<'a> ByteWriter<'a> {
     pub fn write_i64(&mut self, x: i64) {
         debug_assert!(self.dst.len() - self.pos as usize >= 8);
 
-        let bytes = i64::to_be_bytes(x);
+        let bytes = i64::to_le_bytes(x);
         let p = self.pos as usize;
         self.pos += 8;
         unsafe {
@@ -449,6 +449,9 @@ impl<'a> BitWriter<'a> {
 
     #[inline]
     pub fn flush_partials(&mut self) {
+        if self.bit_pos == 0 {
+            return;
+        }
         self.write(self.current as u32 & !(0xFFFF_FFFF << self.bit_pos));
         self.bits_written -= 32; // write() assumes all 32 bits are used
         self.bits_written += self.bit_pos as usize;
@@ -518,5 +521,14 @@ mod tests {
         assert_eq!(reader.uint(32), 0);
         assert_eq!(reader.uint(32), 0);
         assert_eq!(reader.uint(32), 0);
+    }
+
+    #[test]
+    fn specific_test() {
+        let mut buf = 8817576293760u64.to_be_bytes();
+
+        let mut reader = super::BitReader::new(&mut buf);
+        assert_eq!(5, reader.uint(11));
+        assert_eq!(1, reader.uint(13));
     }
 }

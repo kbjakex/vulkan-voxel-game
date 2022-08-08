@@ -154,9 +154,8 @@ pub(super) mod entity_state {
         mut messages: UnboundedReceiver<Vec<u8>>,
     ) -> Result<()> {
         println!("entity_state::send_driver ready");
-        let mut buf = [0u8; 128];
         while let Some(message) = messages.recv().await {
-
+            outgoing.write_all(&message).await?;
         }
         Ok(())
     }

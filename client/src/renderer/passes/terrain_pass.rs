@@ -109,7 +109,7 @@ pub fn create_pipelines(
             vk::PipelineRasterizationStateCreateInfoBuilder::new()
                 .cull_mode(vk::CullModeFlags::BACK)
                 .line_width(1.0)
-                .polygon_mode(vk::PolygonMode::FILL)
+                .polygon_mode(vk::PolygonMode::LINE)
                 .depth_bias_enable(false)
                 .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
                 .rasterizer_discard_enable(false),

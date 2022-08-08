@@ -63,6 +63,9 @@ pub mod input {
 // Resources specific to the 'game' state, aka
 // when you're actually playing and not in a menu
 pub mod game_state {
+    use hecs::Entity;
+    use shared::protocol::NetworkId;
+
     use crate::{game::{states::game::input_recorder::InputRecorder, player::ThePlayer}, world::{dimension::{ECS, Chunks}, chunk_renderer::ChunkRenderer}};
 
     pub struct Resources {
@@ -79,8 +82,10 @@ pub mod game_state {
     }
 
     pub struct Net {
+        pub nid: NetworkId,
         pub connection: crate::networking::Connection,
         pub network_tick_count: u32,
         pub next_network_tick: f32,
+        pub nid_to_entity_mapping: Vec<(NetworkId, Entity)>,
     }
 }

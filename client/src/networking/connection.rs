@@ -32,7 +32,7 @@ async fn generic_recv_driver<F: FnMut(ByteReader) -> MessageStatus>(
 
         let total_num_bytes = offset + bytes_received;
 
-        println!("Received {} bytes", bytes_received);
+        //println!("Received {} bytes; total: {total_num_bytes}", bytes_received);
 
         match (callback)(ByteReader::new(&recv_buffer[..total_num_bytes])) {
             MessageStatus::Consumed(num_bytes) => {
@@ -122,11 +122,53 @@ pub(super) mod entity_state {
         x NumEntries (Sorted ascending by entity id) 
     */
 
+    use shared::{bits_and_bytes::{BitReader, ByteWriter}, protocol::NetworkId};
+
     use super::*;
 
     pub async fn recv_driver(incoming: RecvStream, to_main: UnboundedSender<Vec<u8>>) -> anyhow::Result<()> {
+        use MessageStatus::*;
+
+        let mut buf = Vec::new();
+        buf.resize(2048, 0);
+
         generic_recv_driver(incoming, 8192, move |mut stream| {
-            if stream.bytes_remaining() < 2 {
+            let mut reader = BitReader::new(stream.bytes());
+            if stream.bytes_remaining() < 3 {
+                return NotEnoughData;
+            }
+
+            let len = reader.uint(11) as usize + 3;
+            //println!("Received {len} bytes of entity state data. Buffered: {}", stream.bytes_remaining());
+            if stream.bytes_remaining() < len {
+                return NotEnoughData;
+            }
+
+            let word = ByteReader::new(stream.bytes()).read_u64();
+            let word2 = BitReader::new(stream.bytes()).uint(32);
+
+            let mut writer = ByteWriter::new(&mut buf);
+
+            let entries = reader.uint(13);
+            //println!("Entries: {entries}, word: {word} vs {word2}");
+            for _ in 0..entries {
+                writer.write_u16(reader.uint(16) as u16);
+                let x = ((reader.uint(8) as i32 - 128) as f32 / 500.0);
+                let y = ((reader.uint(8) as i32 - 128) as f32 / 500.0);
+                let z = ((reader.uint(8) as i32 - 128) as f32 / 500.0);
+
+                //println!("Delta: {x:.8}, {y:.8}, {z:.8}");
+
+                writer.write_f32(x);
+                writer.write_f32(y);
+                writer.write_f32(z);
+            }
+
+            let len = writer.bytes_written();
+            to_main.send((&buf[..len]).to_vec()).unwrap();
+            
+            Consumed(len)
+            /* if stream.bytes_remaining() < 2 {
                 return MessageStatus::NotEnoughData;
             }
 
@@ -142,7 +184,7 @@ pub(super) mod entity_state {
                 MessageStatus::Error
             } else {
                 MessageStatus::Consumed(stream.bytes_read())
-            }
+            } */
         })
         .await
     }

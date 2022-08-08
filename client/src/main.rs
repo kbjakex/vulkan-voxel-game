@@ -9,6 +9,7 @@ pub mod renderer;
 pub mod resources;
 pub mod text_box;
 pub mod world;
+pub mod components;
 
 use game::Game;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;

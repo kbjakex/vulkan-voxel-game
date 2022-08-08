@@ -1,5 +1,6 @@
 /server/target/
 /client/target/
 /vkcore/target/
+/shared/target/
 /tools/compressor/target/
 /tools/texpack/target

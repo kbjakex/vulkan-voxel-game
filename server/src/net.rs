@@ -1,13 +1,13 @@
 use flexstr::{SharedStr, ToSharedStr};
 use glam::Vec3;
 use hecs::{Entity, World};
-use shared::protocol::{NetworkId, RawNetworkId};
+use shared::{protocol::{NetworkId, RawNetworkId}, bits_and_bytes::{BitWriter, ByteReader, ByteWriter}};
 use tokio::sync::mpsc::UnboundedSender;
 
 use anyhow::Result;
 
 use crate::{
-    components::Position,
+    components::{Facing, OldPosition, Position},
     networking::{NetHandle, PlayersChanged},
     resources::Resources,
     Username,
@@ -18,6 +18,9 @@ pub struct Network {
     // A handle to the network thread
     handle: NetHandle,
     pub id_manager: NetworkIdManager,
+
+    moved_entity_positions: Vec<Vec3>,
+    moved_entity_data: Vec<(NetworkId, Vec3)>, // (id, delta_pos)
 }
 
 impl Network {
@@ -35,31 +38,79 @@ pub fn broadcast_chat(message: SharedStr, world: &mut World) {
 }
 
 pub fn tick(res: &mut Resources) {
-    poll_joins(res);
+    res.net.moved_entity_data.clear();
+    res.net.moved_entity_positions.clear();
 
-    let handle = &mut res.net.handle;
+    poll_joins(res);
+    let net = &mut res.net;
+
+    let handle = &mut net.handle;
     while let Ok((_, message)) = handle.channels.chat_recv.try_recv() {
         broadcast_chat(message, &mut res.main_world);
     }
 
     while let Ok((id, msg)) = handle.channels.player_state_recv.try_recv() {
-        let Some(entity) = res.net.id_manager.get_entity(id) else {
-            eprintln!("ERROR: Received PlayerStateMsg from player with no entity mapping! Network id: {}", id.raw());
+        let Some(entity) = net.id_manager.get_entity(id) else {
+            debug_assert!(false, "ERROR: Received PlayerStateMsg from player with no entity mapping! Network id: {}", id.raw());
             continue;
         };
+        let entity = res.main_world.entity(entity).unwrap();
 
         if let Some(delta) = msg.delta_pos {
-            let mut pos = res.main_world.get::<&mut Position>(entity).unwrap();
+            
+            let mut pos = entity.get::<&mut Position>().unwrap();
             pos.xyz += delta;
-            println!("Position of player #{}: ({:.8}, {:.8}, {:.8})", id.raw(), pos.xyz.x, pos.xyz.y, pos.xyz.z);
+            println!(
+                "Position of player #{}: ({:.8}, {:.8}, {:.8})",
+                id.raw(),
+                pos.xyz.x,
+                pos.xyz.y,
+                pos.xyz.z
+            );
+            net.moved_entity_positions.push(pos.xyz);
+            net.moved_entity_data.push((id, delta));
+        }
+    }
+
+    // O(N²) let's go! Would be trivially parallelizable IF PlayerConnection was not a component.
+    // TODO: heavily consider just keeping an array of PlayerConnections in Network. Or even better,
+    // a vec per stream type in AoS style.
+    let mut buf = [0u8; 2048];
+    for (_, (pos, facing, channels)) in res.main_world.query_mut::<(&Position, &Facing, &mut PlayerConnection)>() {
+        let mut count = 0;
+
+        let mut writer = BitWriter::new(&mut buf);
+        writer.uint(0, 24);
+        for (id, delta_pos) in net.moved_entity_data.iter().copied() {
+            writer.uint(id.raw() as _, 16);
+            writer.uint(((delta_pos.x * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
+            writer.uint(((delta_pos.y * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
+            writer.uint(((delta_pos.z * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
+
+
+            println!("delta x: {:.8}", delta_pos.x);
+            println!("delta y: {:.8}", delta_pos.y);
+            println!("delta z: {:.8}", delta_pos.z);
+
+            count += 1;
         }
 
-        /* for (_, connection) in res.main_world.query_mut::<&mut PlayerConnection>() {
-            if let Err(e) = connection.pl.send(message.clone()) {
-                eprintln!("Failed to send chat message: {e}");
+        if count > 0 {
+            writer.flush_partials();
+            let len = writer.compute_bytes_written();
+            
+            let mut word = ByteReader::new(&mut buf).read_u32();
+            word |= len as u32 - 3;
+            word |= count << 11;
+            println!("Sending {len} bytes of entity state! ({count} entities. Word: {word})");
+            ByteWriter::new(&mut buf).write_u32(word);
+
+            if channels.entity_state.send((&buf[..len]).to_vec()).is_err() {
+                eprintln!("Failed to send entity state");
             }
-        } */
+        }
     }
+    //println!("End of network frame");
 }
 
 fn poll_joins(res: &mut Resources) {
@@ -96,7 +147,17 @@ fn poll_joins(res: &mut Resources) {
 
                 if res
                     .main_world
-                    .insert(entity, (network_id, Username(username), channels, Position{ xyz: Vec3::ZERO }))
+                    .insert(
+                        entity,
+                        (
+                            network_id,
+                            Username(username),
+                            channels,
+                            Position { xyz: Vec3::ZERO },
+                            OldPosition(Vec3::ZERO),
+                            Facing(Vec3::X),
+                        ),
+                    )
                     .is_err()
                 {
                     eprintln!("Entity was removed from world when player was connecting?!");
@@ -106,12 +167,7 @@ fn poll_joins(res: &mut Resources) {
                 let entity = net.id_manager.free(network_id);
                 println!("Player with network id {network_id} disconnected");
 
-                let username = &res
-                    .main_world
-                    .get::<&Username>(entity)
-                    .unwrap()
-                    .0
-                    .clone();
+                let username = &res.main_world.get::<&Username>(entity).unwrap().0.clone();
 
                 broadcast_chat(
                     format!("{username} disconnected").to_shared_str(),
@@ -164,7 +220,6 @@ impl NetworkIdManager {
         let id = self.recycled_ids.pop().unwrap_or_else(|| {
             self.next_unused += 1;
             NetworkId::from_raw(self.next_unused - 1)
-
         });
 
         self.mapping[id.raw() as usize] = (id, entity);
@@ -204,5 +259,7 @@ pub fn init() -> Result<Network> {
     Ok(Network {
         handle: crate::networking::init()?,
         id_manager: NetworkIdManager::default(),
+        moved_entity_data: Vec::new(),
+        moved_entity_positions: Vec::new(),
     })
 }

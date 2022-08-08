@@ -49,7 +49,7 @@ impl State for UsernameQueryState {
         self.username_box
             .set_contents("jetp250".chars().collect(), text);
         self.address_box
-            .set_contents("65.108.78.237:29477".chars().collect(), text);
+            .set_contents("localhost:29477".chars().collect(), text);
         self.selected = 2;
 
         Ok(())
