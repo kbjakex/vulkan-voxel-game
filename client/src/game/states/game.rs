@@ -4,9 +4,10 @@ use std::{ffi::c_void, time::Instant};
 
 use erupt::vk::{self, BufferUsageFlags};
 use flexstr::SharedStr;
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Mat4, Vec2, Vec3, DVec3};
 use hecs::Entity;
 use shared::{bits_and_bytes::{BitWriter, ByteReader}, protocol::{s2c::login::LoginResponse, NetworkId}};
+use smallvec::SmallVec;
 use thunderdome::Arena;
 use vkcore::{Buffer, BufferAllocation, UsageFlags, VkContext};
 use winit::event::{DeviceEvent, ElementState, Event, KeyboardInput, WindowEvent};
@@ -156,9 +157,7 @@ impl GameState {
 
         if res.time.secs_f32 >= net.next_network_tick {
             net.network_tick_count += 1;
-            let t = net.next_network_tick;
             net.next_network_tick = (net.network_tick_count as f64 * shared::TICK_DURATION.as_secs_f64()) as f32;
-            self.send_stuff_to_server(res, t);
         }
 
         let net = &mut self.res.net;
@@ -204,44 +203,6 @@ impl GameState {
             }
         }
     }
-
-    fn send_stuff_to_server(&mut self, res: &mut Resources, network_tick_time_secs: f32) {
-        let net = &mut self.res.net;
-
-        let velocity = self
-            .res
-            .input_recorder
-            .integrator
-            .end_network_tick(res.time.secs_f32, network_tick_time_secs);
-
-        print!("net: ");
-        self.res.camera.move_to(self.res.input_recorder.integrator.pos);
-
-        let pos = self.res.camera.pos();
-        if velocity.length() > f32::EPSILON {
-            //self.res.chat.add_chat_entry(None, format!("{:.8}, {:.8}, {:.8}", pos.x, pos.y, pos.z), TextColor::default(), res.time.secs_f32);
-        }
-
-        //dbg![velocity];
-
-        if let Some(channels) = net.connection.channels() {
-            let mut payload = [0u8; 4];
-
-            let mut writer = BitWriter::new(&mut payload);
-            if writer.bool(velocity.length_squared() > f32::EPSILON) {
-                writer.uint(((velocity.x * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
-                writer.uint(((velocity.y * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
-                writer.uint(((velocity.z * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
-            }
-            writer.flush_partials();
-
-            let len = writer.compute_bytes_written();
-
-            if let Err(e) = channels.player_state_send.send(payload[0..len].to_vec()) {
-                eprintln!("Error sending position data (channel closed?): {e}");
-            }
-        }
-    }
 }
 
 // Resources
@@ -263,21 +224,45 @@ impl GameState {
         let keyboard = &mut res.input.keyboard;
         let camera = &mut self.res.camera;
 
-        let keyboard = if keyboard.is_in_text_input_mode() {
-            None
-        } else {
-            Some(keyboard)
-        };
+        let right = keyboard.get_axis(Key::D, Key::A);
+        let up = keyboard.get_axis(Key::Space, Key::LShift);
+        let fwd = keyboard.get_axis(Key::W, Key::S);
 
-        let pos = self.res.input_recorder.integrator.update(
-            keyboard,
-            camera,
-            4.0,
-            res.time.secs_f32,
-        );
+        if right != 0 || up != 0 || fwd != 0 {
+            let (ys, yc) = camera.yaw().sin_cos();
+            let fwd_dir = DVec3::new(yc as f64, 0.0, ys as f64);
+            let up_dir = DVec3::Y;
+            let right_dir = fwd_dir.cross(up_dir);
 
-        print!("update_camera(): ");
-        camera.move_to(pos);
+            let hor_vel = ((right as f64) * right_dir + (fwd as f64) * fwd_dir).normalize_or_zero();
+            let velocity = hor_vel + (up as f64) * up_dir;
+            let velocity = 4.0 * velocity * res.time.dt_secs as f64;
+
+            let mut nw_frame_velocities = SmallVec::new();
+            let new_pos = self.res.input_recorder.integrator.step(velocity, res.time.dt_secs as f64, &mut nw_frame_velocities);
+            camera.move_to(new_pos.0);
+
+            if !nw_frame_velocities.is_empty() && let Some(channels) = self.res.net.connection.channels() {
+                for velocity in nw_frame_velocities {
+                    //println!("Moved {} units in NW tick", velocity.length());
+                    let mut payload = [0u8; 4];
+        
+                    let mut writer = BitWriter::new(&mut payload);
+                    if writer.bool(velocity.length_squared() > f32::EPSILON) {
+                        writer.uint(((velocity.x * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
+                        writer.uint(((velocity.y * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
+                        writer.uint(((velocity.z * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
+                    }
+                    writer.flush_partials();
+        
+                    let len = writer.compute_bytes_written();
+        
+                    if let Err(e) = channels.player_state_send.send(payload[0..len].to_vec()) {
+                        eprintln!("Error sending position data (channel closed?): {e}");
+                    }
+                }
+            }
+        }
         camera.update();
     }
 }
@@ -444,6 +429,7 @@ impl GameState {
             now: time,
             ms_u32: 0,
             secs_f32: 0.0,
+            dt_secs: 0.0,
         };
 
         Self {
@@ -458,7 +444,7 @@ impl GameState {
                     nid_to_entity_mapping: Vec::with_capacity(512)
                 },
                 camera: Camera::new(login.position, res.window_size.xy),
-                input_recorder: InputRecorder::new(login.position, res.time.secs_f32),
+                input_recorder: InputRecorder::new(login.position),
                 entities: ECS::new(),
                 chunks: Chunks::new(login.world_seed, 24, login.position.as_ivec3().to_chunk_pos()),
                 the_player: ThePlayer::new(login.position),

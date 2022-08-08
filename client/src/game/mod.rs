@@ -57,17 +57,20 @@ impl Game {
     }
 
     fn update_core_resources(&mut self) {
+        let prev_t = self.resources.time.secs_f32;
+
         let now = Instant::now();
         let time_res = &mut self.resources.time;
         time_res.now = now;
         time_res.secs_f32 = (now - time_res.at_launch).as_secs_f32();
         time_res.ms_u32 = (now - time_res.at_launch).as_millis() as u32;
+        time_res.dt_secs = time_res.secs_f32 - prev_t;
 
         let timings = &mut self.resources.metrics.frame_time;
         let frametime = (now - timings.last_updated).as_secs_f32() * 1000.0;
-        timings.frametime_history[self.resources.metrics.frame_count as usize & 15] = frametime;
+        timings.frametime_history[self.resources.metrics.frame_count as usize & (timings.frametime_history.len()-1)] = frametime;
 
-        let avg = timings.frametime_history.iter().sum::<f32>() / 16.0;
+        let avg = timings.frametime_history.iter().sum::<f32>() / (timings.frametime_history.len() as f32);
         timings.avg_fps = 1000.0 / avg;
         timings.avg_frametime_ms = avg;
         timings.last_updated = now;
@@ -198,6 +201,7 @@ impl Game {
                 now: time,
                 ms_u32: 0,
                 secs_f32: 0.0,
+                dt_secs: 0.0,
             },
             window_handle: window,
             window_size: WindowSize {
@@ -217,7 +221,7 @@ impl Game {
                 frame_time: metrics::FrameTime {
                     avg_fps: 60.0, // whatever
                     avg_frametime_ms: 1000.0 / 60.0,
-                    frametime_history: [1000.0 / 60.0; 16],
+                    frametime_history: [1000.0 / 60.0; 32],
                     last_updated: time,
                 },
             },

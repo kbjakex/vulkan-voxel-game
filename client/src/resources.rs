@@ -27,6 +27,7 @@ pub mod core {
         pub now: std::time::Instant,       // updated at the very start of each frame
         pub ms_u32: u32,
         pub secs_f32: f32,
+        pub dt_secs: f32,
     }
 
     pub struct WindowSize {
@@ -40,7 +41,7 @@ pub mod metrics {
     pub struct FrameTime {
         pub avg_fps: f32,
         pub avg_frametime_ms: f32,
-        pub frametime_history: [f32; 16],
+        pub frametime_history: [f32; 32],
         pub last_updated: std::time::Instant,
     }
 

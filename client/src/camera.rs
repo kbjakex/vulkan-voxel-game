@@ -55,8 +55,6 @@ impl Camera {
     }
 
     pub fn move_to(&mut self, pos: Vec3) {
-        let d = pos.distance(self.pos);
-        println!("Camera moving {d:.5} units");
         self.pos = pos;
     }
 
