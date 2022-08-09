@@ -1,16 +1,15 @@
 pub mod input_recorder;
 
-use std::{ffi::c_void, time::Instant};
+use std::{ffi::c_void, time::Instant, f32::consts::PI};
 
 use erupt::vk::{self, BufferUsageFlags};
 use flexstr::SharedStr;
-use glam::{Mat4, Vec2, Vec3, DVec3};
+use glam::{Mat4, Vec2, Vec3, DVec3, vec2, vec3, Quat, EulerRot};
 use hecs::Entity;
-use shared::{bits_and_bytes::{BitWriter, ByteReader}, protocol::{s2c::login::LoginResponse, NetworkId}};
+use shared::{bits_and_bytes::{BitWriter, ByteReader, ByteWriter}, protocol::{s2c::login::LoginResponse, NetworkId, encode_angle_rad, encode_velocity, wrap_angle, decode_angle_rad}};
 use smallvec::SmallVec;
-use thunderdome::Arena;
 use vkcore::{Buffer, BufferAllocation, UsageFlags, VkContext};
-use winit::event::{DeviceEvent, ElementState, Event, KeyboardInput, WindowEvent};
+use winit::{event::{DeviceEvent, ElementState, Event, KeyboardInput, WindowEvent}, dpi::LogicalPosition, window::CursorGrabMode};
 
 use crate::{
     camera::Camera,
@@ -19,22 +18,28 @@ use crate::{
     input::Key,
     networking::Connection,
     renderer::{
-        passes::terrain_pass::Vertex, renderer::Clear, text_renderer::TextColor,
+        passes::terrain_pass::Vertex, renderer::Clear,
         ui_renderer::UiRenderer, wrappers::VertexBuffer,
     },
     resources::{
         core::{WindowSize, Time},
         game_state,
         Resources,
-    }, world::{dimension::{ECS, Chunks}, chunk::WorldBlockPosExt, chunk_renderer::ChunkRenderer}, components::Position,
+    }, world::{dimension::{ECS, Chunks}, chunk::WorldBlockPosExt, chunk_renderer::ChunkRenderer}, components::{Position, Velocity, HeadRotation},
 };
 
-use self::input_recorder::InputRecorder;
+use self::input_recorder::{InputRecorder, YawPitch};
 
 use super::connection_lost::ConnectionLostState;
 
 pub struct GameState {
     pub res: game_state::Resources,
+
+    // Raw mouse motion; for camera only
+    mouse_move_accumulator: Vec2,
+
+    tick: u32,
+
     grid_vbo: VertexBuffer,
     cube_vbo: VertexBuffer,
 }
@@ -50,6 +55,9 @@ impl State for GameState {
         println!("Window size: {size:?}");
         res.window_handle.set_inner_size(size);
         res.window_handle.set_maximized(true);
+        res.window_handle.set_cursor_position(LogicalPosition::new(size.width / 2, size.height / 2))?;
+        res.window_handle.set_cursor_grab(CursorGrabMode::Confined)?;
+        res.window_handle.set_cursor_visible(false);
         println!("Entering GameState");
 
         self.grid_vbo = create_debug_grid(&mut res.renderer.vk)?;
@@ -86,12 +94,15 @@ impl State for GameState {
             &res.window_size,
             &res.window_handle,
             res.time.secs_f32,
-        );
+        ).unwrap(); // TODO
 
         res.renderer.ui.draw_text(&format!("FPS: {:.4}", res.metrics.frame_time.avg_fps), 30, res.window_size.extent.height as u16 - 60);
-        res.renderer.ui.draw_text(&format!("X: {:.4}", self.res.camera.pos().x), 30, res.window_size.extent.height as u16 - 90);
-        res.renderer.ui.draw_text(&format!("Y: {:.4}", self.res.camera.pos().y), 30, res.window_size.extent.height as u16 - 120);
-        res.renderer.ui.draw_text(&format!("Z: {:.4}", self.res.camera.pos().z), 30, res.window_size.extent.height as u16 - 150);
+        res.renderer.ui.draw_text(&format!("X: {:.8}", self.res.camera.pos().x), 30, res.window_size.extent.height as u16 - 90);
+        res.renderer.ui.draw_text(&format!("Y: {:.8}", self.res.camera.pos().y), 30, res.window_size.extent.height as u16 - 120);
+        res.renderer.ui.draw_text(&format!("Z: {:.8}", self.res.camera.pos().z), 30, res.window_size.extent.height as u16 - 150);
+        res.renderer.ui.draw_text(&format!("Yaw: {:.8}", self.res.camera.yaw().to_degrees()), 30, res.window_size.extent.height as u16 - 180);
+        res.renderer.ui.draw_text(&format!("Pitch: {:.8}", self.res.camera.pitch().to_degrees()), 30, res.window_size.extent.height as u16 - 210);
+
 
         if let Err(e) = self.render(res) {
             eprintln!("render() error: {e}");
@@ -121,10 +132,12 @@ impl State for GameState {
                 ..
             } => {
                 if !self.res.chat.is_open() {
-                    let speed = res.input.settings.mouse_sensitivity * 0.0025;
-                    self.res
-                        .camera
-                        .rotate(delta.0 as f32 * speed, delta.1 as f32 * speed);
+                    self.mouse_move_accumulator += vec2(delta.0 as f32, -delta.1 as f32);
+                }
+            }
+            Event::WindowEvent { event: WindowEvent::Focused(focus_gained), .. } => {
+                if !focus_gained && !self.res.chat.is_open() {
+                    self.res.chat.toggle_open(&mut res.input.keyboard, &res.window_handle, res.window_size.xy).unwrap();
                 }
             }
             Event::WindowEvent {
@@ -173,31 +186,37 @@ impl GameState {
                         reader.read_f32(),
                         reader.read_f32()
                     );
+                    let rotation = Vec2::new(
+                        reader.read_f32(),
+                        reader.read_f32()
+                    );
 
                     if id == net.nid {
                         // bleh
                     } else {
-                        if net.nid_to_entity_mapping.len() < id.raw() as usize {
+                        if net.nid_to_entity_mapping.len() <= id.raw() as usize {
                             net.nid_to_entity_mapping.resize(id.raw() as usize + 1, (NetworkId::from_raw(0), Entity::DANGLING));
                         }
 
                         let (check_id, mut entity) = net.nid_to_entity_mapping[id.raw() as usize];
-                        if check_id != id {
+                        if check_id != id || entity == Entity::DANGLING {
                             if entity != Entity::DANGLING {
                                 let _ = ecs.despawn(entity); // bad
                             }
+                            println!("Spawning entity with id {id}");
 
                             // New entity then. TODO: add a proper way to spawn entities and make this an error
-                            entity = ecs.spawn((id, Position(Vec3::ZERO)));
+                            entity = ecs.spawn((id, Position(Vec3::ZERO), HeadRotation(Vec2::ZERO)));
                             net.nid_to_entity_mapping[id.raw() as usize] = (id, entity);
 
                             println!("Spawned entity with id {id:?}");
                         }
 
                         ecs.get::<&mut Position>(entity).unwrap().0 += velocity;
+                        ecs.get::<&mut HeadRotation>(entity).unwrap().0 += rotation;
 
                         let p = ecs.get::<&mut Position>(entity).unwrap().0;
-                        //println!("Entity {id:?} is now at position {p}");
+                        println!("Entity {id:?} is now at position {p}");
                     }
                 }
             }
@@ -208,14 +227,13 @@ impl GameState {
 // Resources
 impl GameState {
     fn update_resources(&mut self, res: &mut Resources) -> Option<Box<StateChange>> {
+        self.update_camera(res);
         self.update_net(res);
         if self.res.net.connection.closed() {
             return Some(Box::new(StateChange::SwitchTo(Box::new(
                 ConnectionLostState::new(),
             ))));
         }
-
-        self.update_camera(res);
 
         None
     }
@@ -228,38 +246,64 @@ impl GameState {
         let up = keyboard.get_axis(Key::Space, Key::LShift);
         let fwd = keyboard.get_axis(Key::W, Key::S);
 
+        let mut velocity = self.res.the_player.vel * 0.9;
+        
         if right != 0 || up != 0 || fwd != 0 {
             let (ys, yc) = camera.yaw().sin_cos();
-            let fwd_dir = DVec3::new(yc as f64, 0.0, ys as f64);
-            let up_dir = DVec3::Y;
+            let fwd_dir = Vec3::new(yc, 0.0, ys);
+            let up_dir = Vec3::Y;
             let right_dir = fwd_dir.cross(up_dir);
 
-            let hor_vel = ((right as f64) * right_dir + (fwd as f64) * fwd_dir).normalize_or_zero();
-            let velocity = hor_vel + (up as f64) * up_dir;
-            let velocity = 4.0 * velocity * res.time.dt_secs as f64;
+            let hor_acc = (right as f32 * right_dir + fwd as f32 * fwd_dir).normalize_or_zero();
+            let acc = (hor_acc + up as f32 * up_dir) * 5.0;
 
-            let mut nw_frame_velocities = SmallVec::new();
-            let new_pos = self.res.input_recorder.integrator.step(velocity, res.time.dt_secs as f64, &mut nw_frame_velocities);
-            camera.move_to(new_pos.0);
+            velocity = (velocity + acc).clamp_length_max(20.0);
+        }
+        self.res.the_player.vel = velocity;
 
-            if !nw_frame_velocities.is_empty() && let Some(channels) = self.res.net.connection.channels() {
-                for velocity in nw_frame_velocities {
-                    //println!("Moved {} units in NW tick", velocity.length());
-                    let mut payload = [0u8; 4];
-        
-                    let mut writer = BitWriter::new(&mut payload);
-                    if writer.bool(velocity.length_squared() > f32::EPSILON) {
-                        writer.uint(((velocity.x * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
-                        writer.uint(((velocity.y * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
-                        writer.uint(((velocity.z * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
-                    }
-                    writer.flush_partials();
-        
-                    let len = writer.compute_bytes_written();
-        
-                    if let Err(e) = channels.player_state_send.send(payload[0..len].to_vec()) {
-                        eprintln!("Error sending position data (channel closed?): {e}");
-                    }
+        let mouse_speed = res.input.settings.mouse_sensitivity * 0.0025;
+        let mouse_motion = self.mouse_move_accumulator * mouse_speed;
+        self.mouse_move_accumulator = Vec2::ZERO;
+
+        let mut nw_frames = SmallVec::new();
+        let new_pos = self.res.input_recorder.integrator.step(velocity.as_dvec3() * res.time.dt_secs as f64, mouse_motion.as_dvec2(), res.time.dt_secs as f64, &mut nw_frames);
+        camera.move_to(new_pos.0.0);
+        camera.set_rotation(new_pos.1.0, new_pos.1.1);
+
+        if !nw_frames.is_empty() && let Some(channels) = self.res.net.connection.channels() {
+            for (Velocity(velocity), YawPitch(yaw, pitch)) in nw_frames {
+                //println!("Moved {} units in NW tick", velocity.length());
+                let mut payload = [0u8; 16];
+    
+                let mut writer = ByteWriter::new(&mut payload);
+                let has_velocity = velocity.length_squared() != 0.0;
+                let has_rotation = vec2(yaw, pitch).length_squared() != 0.0;
+
+                if !has_velocity && !has_rotation {
+                    continue;
+                }
+
+                writer.write_u32(self.tick);
+                //println!("Delta for tick {}: {:.8}, {:.8}, {:.8}, pos {:.8}, {:.8}, {:.8}", self.tick, velocity.x, velocity.y, velocity.z, origin.x, origin.y, origin.z);
+                self.tick += 1;
+                writer.write_u8((has_velocity as u8) | ((has_rotation as u8) << 1));
+
+                if has_velocity {
+                    //println!("Moved {} units in nw frame", velocity.length());
+                    writer.write_u16(encode_velocity(velocity.x) as u16);
+                    writer.write_u16(encode_velocity(velocity.y) as u16);
+                    writer.write_u16(encode_velocity(velocity.z) as u16);
+                }
+                if has_rotation {
+                    //println!("Rot delta for tick {}: {:.8}, {:.8}, rot: {:.8}, {:.8}", self.tick, yaw.to_degrees(), pitch.to_degrees(), origin.x.to_degrees(), origin.y.to_degrees());
+                    writer.write_u16(encode_angle_rad(shared::protocol::wrap_angle(yaw)) as u16);
+                    writer.write_u16(encode_angle_rad(shared::protocol::wrap_angle(pitch)) as u16);
+                }
+
+                let len = writer.bytes_written();
+    
+                if let Err(e) = channels.player_state_send.send(payload[0..len].to_vec()) {
+                    eprintln!("Error sending position data (channel closed?): {e}");
                 }
             }
         }
@@ -336,8 +380,9 @@ impl GameState {
                     &[self.cube_vbo.buffer.handle],
                     &[0],
                 );
-                self.res.entities.query::<&Position>().iter().for_each(|(_, pos)| {
-                    let pv = self.res.camera.proj_view_matrix() * Mat4::from_translation(pos.0);
+
+                self.res.entities.query::<(&Position, &HeadRotation)>().iter().for_each(|(_, (pos, rot))| {
+                    let pv = self.res.camera.proj_view_matrix() * Mat4::from_translation(pos.0) * Mat4::from_euler(EulerRot::YXZ, rot.0.x + PI/2.0, -rot.0.y, 0.0);
                     let pvm_ptr = &pv as *const Mat4 as *const c_void;
                     vk.device.cmd_push_constants(
                         ctx.commands,
@@ -433,6 +478,7 @@ impl GameState {
         };
 
         Self {
+            tick: 0,
             res: game_state::Resources {
                 username,
                 chat: Chat::new(res.window_size.extent.width as _),
@@ -443,13 +489,14 @@ impl GameState {
                     next_network_tick: shared::TICK_DURATION.as_secs_f32(),
                     nid_to_entity_mapping: Vec::with_capacity(512)
                 },
-                camera: Camera::new(login.position, res.window_size.xy),
+                camera: Camera::new(login.position, res.window_size.xy, f32::to_radians(80.0)),
                 input_recorder: InputRecorder::new(login.position),
                 entities: ECS::new(),
                 chunks: Chunks::new(login.world_seed, 24, login.position.as_ivec3().to_chunk_pos()),
                 the_player: ThePlayer::new(login.position),
                 chunk_renderer: ChunkRenderer::new(),
             },
+            mouse_move_accumulator: Vec2::ZERO,
             grid_vbo: VertexBuffer {
                 buffer: Buffer::null(),
                 vertex_count: 0,
@@ -520,37 +567,30 @@ fn create_debug_grid(vk: &mut VkContext) -> anyhow::Result<VertexBuffer> {
 fn create_debug_cube(vk: &mut VkContext) -> anyhow::Result<VertexBuffer> {
     let mut vertices: Vec<Vertex> = Vec::new();
 
-    vertices.push(Vertex {
-        pos: Vec3::new(-0.5, 0.0, -0.5),
-        col: Vec3::ZERO,
-        uv: Vec2::ZERO,
-    });
-    vertices.push(Vertex {
-        pos: Vec3::new(-0.5, 0.0, -0.5 + 1.0),
-        col: Vec3::ZERO,
-        uv: Vec2::ZERO
-    });
-    vertices.push(Vertex {
-        pos: Vec3::new(-0.5 + 1.0, 0.0, -0.5),
-        col: Vec3::ZERO,
-        uv: Vec2::ZERO
-    });
+    let corners = [
+        Vertex { pos: Vec3::new(-0.5, -0.5, -0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
+        Vertex { pos: Vec3::new(-0.5, -0.5, 0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
+        Vertex { pos: Vec3::new(-0.5, 0.5, -0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
+        Vertex { pos: Vec3::new(-0.5, 0.5, 0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
 
-    vertices.push(Vertex {
-        pos: Vec3::new(-0.5 + 1.0, 0.0, -0.5),
-        col: Vec3::ZERO,
-        uv: Vec2::ZERO
-    });
-    vertices.push(Vertex {
-        pos: Vec3::new(-0.5, 0.0, -0.5 + 1.0),
-        col: Vec3::ZERO,
-        uv: Vec2::ZERO
-    });
-    vertices.push(Vertex {
-        pos: Vec3::new(-0.5 + 1.0, 0.0, -0.5 + 1.0),
-        col: Vec3::ZERO,
-        uv: Vec2::ZERO
-    });
+        Vertex { pos: Vec3::new(0.5, -0.5, -0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
+        Vertex { pos: Vec3::new(0.5, -0.5, 0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
+        Vertex { pos: Vec3::new(0.5, 0.5, -0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
+        Vertex { pos: Vec3::new(0.5, 0.5, 0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
+    ];
+
+    let indices = [
+        [0, 1, 2], [2, 1, 3], // -X
+        [4, 6, 5], [5, 6, 7], // +X
+        [0, 2, 4], [4, 2, 6], // -Z
+        [1, 5, 3], [3, 5, 7], // +Z
+        [2, 3, 6], [6, 3, 7], // +Y
+        [0, 4, 1], [1, 4, 5], // -Y
+    ];
+
+    for i in indices.iter().flatten().copied() {
+        vertices.push(corners[i]);
+    }
 
     let mut buffer = vk.allocator.allocate_buffer(
         &vk.device,

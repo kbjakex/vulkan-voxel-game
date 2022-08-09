@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use anyhow::Result;
 use flexstr::SharedStr;
-use glam::Vec3;
+use glam::{Vec3, Vec2};
 use quinn::{Incoming, SendStream};
 use tokio::{
     sync::{
@@ -18,7 +18,9 @@ use super::PlayersChanged;
 
 #[derive(Debug)]
 pub struct PlayerStateMsg {
+    pub tick: u32,
     pub delta_pos: Option<Vec3>,
+    pub delta_yaw_pitch: Option<Vec2>,
 }
 #[derive(Clone)]
 pub struct NetSideChannels {

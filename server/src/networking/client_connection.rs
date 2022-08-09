@@ -24,6 +24,8 @@ async fn generic_recv_driver<F: FnMut(ByteReader) -> MessageStatus>(
     while let Some(bytes_received) = incoming.read(&mut recv_buffer[offset..]).await? {
         let total_num_bytes = offset + bytes_received;
 
+        //println!("Received {bytes_received} bytes, total: {total_num_bytes}");
+
         let mut start = 0;
         while start < total_num_bytes {
             match (callback)(ByteReader::new(&recv_buffer[start..total_num_bytes])) {
@@ -107,8 +109,8 @@ pub(super) mod chat {
 }
 
 pub(super) mod player_state {
-    use glam::Vec3;
-    use shared::{bits_and_bytes::BitReader, protocol::NetworkId};
+    use glam::{Vec3, vec3, vec2};
+    use shared::{bits_and_bytes::BitReader, protocol::{NetworkId, decode_angle_rad}};
 
     use crate::networking::network_thread::PlayerStateMsg;
 
@@ -121,26 +123,45 @@ pub(super) mod player_state {
     ) -> Result<()> {
         println!("player_state::recv_driver ready");
         use MessageStatus::*;
-        generic_recv_driver(incoming, 512, move |stream| {
-            let mut reader = BitReader::new(stream.bytes());
+        generic_recv_driver(incoming, 512, move |mut stream| {
+            if stream.bytes_remaining() < 5 {
+                return NotEnoughData;
+            }
 
-            if reader.bool() {
+            let mut msg = PlayerStateMsg {
+                tick: 0,
+                delta_pos: None,
+                delta_yaw_pitch: None,
+            };
+
+            msg.tick = stream.read_u32();
+
+            let mask = stream.read_u8() as u32;
+
+            if (mask & 0x1) != 0 {
+                if stream.bytes_remaining() < 6 {
+                    return NotEnoughData;
+                }
+    
+                let dx = shared::protocol::decode_velocity(stream.read_u16() as u32);
+                let dy = shared::protocol::decode_velocity(stream.read_u16() as u32);
+                let dz = shared::protocol::decode_velocity(stream.read_u16() as u32);
+                msg.delta_pos = Some(vec3(dx, dy, dz));
+            }
+
+            if (mask & 0x2) != 0 {
                 if stream.bytes_remaining() < 4 {
                     return NotEnoughData;
                 }
 
-                let dx = (reader.uint(8) as i32 - 128) as f32 / 500.0;
-                let dy = (reader.uint(8) as i32 - 128) as f32 / 500.0;
-                let dz = (reader.uint(8) as i32 - 128) as f32 / 500.0;
-
-                let _ = to_server.send((id, PlayerStateMsg {
-                    delta_pos: Some(Vec3::new(dx, dy, dz)),
-                }));
-
-                return Consumed(4);
+                let delta_yaw = decode_angle_rad(stream.read_u16() as u16);
+                let delta_pitch = decode_angle_rad(stream.read_u16() as u16);
+                msg.delta_yaw_pitch = Some(vec2(delta_yaw, delta_pitch));
             }
 
-            Consumed(1)
+            let _ = to_server.send((id, msg));
+
+            return Consumed(stream.bytes_read());
         })
         .await
     }

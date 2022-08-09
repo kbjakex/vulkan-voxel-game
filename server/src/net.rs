@@ -1,13 +1,13 @@
 use flexstr::{SharedStr, ToSharedStr};
-use glam::Vec3;
+use glam::{Vec3, vec2, Vec2};
 use hecs::{Entity, World};
-use shared::{protocol::{NetworkId, RawNetworkId}, bits_and_bytes::{BitWriter, ByteReader, ByteWriter}};
+use shared::{protocol::{NetworkId, RawNetworkId, encode_angle_rad, encode_velocity, decode_angle_rad}, bits_and_bytes::{BitWriter, ByteReader, ByteWriter}};
 use tokio::sync::mpsc::UnboundedSender;
 
 use anyhow::Result;
 
 use crate::{
-    components::{Facing, OldPosition, Position},
+    components::{Facing, OldPosition, Position, HeadYawPitch},
     networking::{NetHandle, PlayersChanged},
     resources::Resources,
     Username,
@@ -20,7 +20,7 @@ pub struct Network {
     pub id_manager: NetworkIdManager,
 
     moved_entity_positions: Vec<Vec3>,
-    moved_entity_data: Vec<(NetworkId, Vec3)>, // (id, delta_pos)
+    moved_entity_data: Vec<(NetworkId, Vec3, Vec2)>, // (id, delta_pos, delta_yaw_pitch)
 }
 
 impl Network {
@@ -38,9 +38,6 @@ pub fn broadcast_chat(message: SharedStr, world: &mut World) {
 }
 
 pub fn tick(res: &mut Resources) {
-    res.net.moved_entity_data.clear();
-    res.net.moved_entity_positions.clear();
-
     poll_joins(res);
     let net = &mut res.net;
 
@@ -57,53 +54,52 @@ pub fn tick(res: &mut Resources) {
         let entity = res.main_world.entity(entity).unwrap();
 
         if let Some(delta) = msg.delta_pos {
-            
             let mut pos = entity.get::<&mut Position>().unwrap();
             pos.xyz += delta;
-            println!(
-                "Position of player #{}: ({:.8}, {:.8}, {:.8})",
-                id.raw(),
-                pos.xyz.x,
-                pos.xyz.y,
-                pos.xyz.z
-            );
-            net.moved_entity_positions.push(pos.xyz);
-            net.moved_entity_data.push((id, delta));
+            //println!("Delta for tick {}: {:.8}, {:.8}, {:.8}, pos {:.8}, {:.8}, {:.8}", msg.tick, delta.x, delta.y, delta.z, pos.xyz.x, pos.xyz.y, pos.xyz.z);
+        }
+
+        if let Some(delta) = msg.delta_yaw_pitch {
+            let mut rot = entity.get::<&mut HeadYawPitch>().unwrap();
+            rot.v += delta;
+            rot.delta += delta;
+
+            //println!("Rot delta for tick {}: {:.8}, {:.8}, rot: {:.8}, {:.8}", msg.tick, delta.x.to_degrees(), delta.y.to_degrees(), rot.0.x.to_degrees(), rot.0.y.to_degrees());
         }
     }
+
+    net.moved_entity_data.clear();
+    net.moved_entity_positions.clear();
+    for (_, (new_pos, old_pos, head_rot, id)) in res.main_world.query_mut::<(&Position, &mut OldPosition, &mut HeadYawPitch, &NetworkId)>() {
+        if head_rot.delta != Vec2::ZERO || old_pos.0 != new_pos.xyz {
+            net.moved_entity_positions.push(new_pos.xyz);
+            net.moved_entity_data.push((*id, new_pos.xyz - old_pos.0, head_rot.delta));
+        }
+        head_rot.delta = Vec2::ZERO;
+        old_pos.0 = new_pos.xyz;
+    }
+    
 
     // O(N²) let's go! Would be trivially parallelizable IF PlayerConnection was not a component.
     // TODO: heavily consider just keeping an array of PlayerConnections in Network. Or even better,
     // a vec per stream type in AoS style.
     let mut buf = [0u8; 2048];
     for (_, (pos, facing, channels)) in res.main_world.query_mut::<(&Position, &Facing, &mut PlayerConnection)>() {
-        let mut count = 0;
-
-        let mut writer = BitWriter::new(&mut buf);
-        writer.uint(0, 24);
-        for (id, delta_pos) in net.moved_entity_data.iter().copied() {
-            writer.uint(id.raw() as _, 16);
-            writer.uint(((delta_pos.x * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
-            writer.uint(((delta_pos.y * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
-            writer.uint(((delta_pos.z * 500.0 + 128.0).round() as i32).clamp(0, 255) as u32, 8);
-
-
-            println!("delta x: {:.8}", delta_pos.x);
-            println!("delta y: {:.8}", delta_pos.y);
-            println!("delta z: {:.8}", delta_pos.z);
-
-            count += 1;
+        let mut stream = ByteWriter::new(&mut buf);
+        stream.write_u16(0);
+        for (id, delta_pos, delta_yaw_pitch) in net.moved_entity_data.iter().copied() {
+            use shared::protocol::wrap_angle;
+            stream.write_u16(id.raw() as _);
+            stream.write_u16(encode_velocity(delta_pos.x) as u16);
+            stream.write_u16(encode_velocity(delta_pos.y) as u16);
+            stream.write_u16(encode_velocity(delta_pos.z) as u16);
+            stream.write_u16(encode_angle_rad(wrap_angle(delta_yaw_pitch.x)));
+            stream.write_u16(encode_angle_rad(wrap_angle(delta_yaw_pitch.y)));
         }
 
-        if count > 0 {
-            writer.flush_partials();
-            let len = writer.compute_bytes_written();
-            
-            let mut word = ByteReader::new(&mut buf).read_u32();
-            word |= len as u32 - 3;
-            word |= count << 11;
-            println!("Sending {len} bytes of entity state! ({count} entities. Word: {word})");
-            ByteWriter::new(&mut buf).write_u32(word);
+        let len = stream.bytes_written();
+        if len > 2 {
+            ByteWriter::new(&mut buf).write_u16(len as u16 - 2); // exclude len itself
 
             if channels.entity_state.send((&buf[..len]).to_vec()).is_err() {
                 eprintln!("Failed to send entity state");
@@ -156,6 +152,7 @@ fn poll_joins(res: &mut Resources) {
                             Position { xyz: Vec3::ZERO },
                             OldPosition(Vec3::ZERO),
                             Facing(Vec3::X),
+                            HeadYawPitch{ v: Vec2::ZERO, delta: Vec2::ZERO }
                         ),
                     )
                     .is_err()

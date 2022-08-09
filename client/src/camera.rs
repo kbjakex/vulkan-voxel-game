@@ -13,12 +13,14 @@ pub struct Camera {
     pitch: f32,
 
     pos: Vec3,
+
+    fov: f32,
 }
 
 impl Camera {
-    pub fn new(pos: Vec3, win_size: Vec2) -> Self {
+    pub fn new(pos: Vec3, win_size: Vec2, fov_rad: f32) -> Self {
         let facing = euler_to_vec(0.0, 0.0);
-        let projection = Self::create_projection_matrix(win_size);
+        let projection = Self::create_projection_matrix(fov_rad, win_size);
         let view = Mat4::look_at_rh(pos, pos + facing, Vec3::Y);
         Camera {
             projection,
@@ -29,7 +31,7 @@ impl Camera {
             yaw: 0.0,
             pitch: 0.0,
             pos,
-            
+            fov: fov_rad
         }
     }
 
@@ -42,12 +44,26 @@ impl Camera {
         self.yaw += yaw_delta_rad;
         self.pitch = (self.pitch - pitch_delta_rad).clamp(-PI/2.0 + 0.001, PI/2.0 - 0.001);
 
+        self.set_rotation(self.yaw, self.pitch);
+    }
+
+    pub fn set_rotation(&mut self, yaw_rad: f32, pitch_rad: f32) {
+        self.yaw = yaw_rad % std::f32::consts::TAU;
+        if self.yaw < 0.0 {
+            self.yaw += std::f32::consts::TAU;
+        }
+        self.pitch = pitch_rad;
         self.facing = euler_to_vec(self.yaw, self.pitch);
         self.right = compute_right(self.facing);
     }
 
+    pub fn set_fov(&mut self, fov_rad: f32, win_size: Vec2) {
+        self.fov = fov_rad;
+        self.on_window_resize(win_size);
+    }
+
     pub fn on_window_resize(&mut self, new_size: Vec2) {
-        self.projection = Self::create_projection_matrix(new_size);
+        self.projection = Self::create_projection_matrix(self.fov, new_size);
     }
 
     pub fn move_by(&mut self, velocity: Vec3) {
@@ -90,9 +106,9 @@ impl Camera {
         self.view
     }
 
-    fn create_projection_matrix(win_size: Vec2) -> Mat4 {
+    fn create_projection_matrix(fov_rad: f32, win_size: Vec2) -> Mat4 {
         Mat4::perspective_infinite_reverse_rh(
-            f32::to_radians(80.0),
+            fov_rad,
             win_size.x / win_size.y,
             0.1,
         )

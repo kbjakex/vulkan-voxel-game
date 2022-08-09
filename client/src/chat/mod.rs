@@ -3,10 +3,11 @@ pub mod commands;
 use std::sync::Mutex;
 
 use arboard::Clipboard;
+use glam::Vec2;
 use hecs::Entity;
 use once_cell::sync::Lazy;
 use smallvec::SmallVec;
-use winit::window::Window;
+use winit::{window::Window, dpi::LogicalPosition};
 
 use crate::{
     input::{Key, Keyboard, Mouse},
@@ -116,6 +117,32 @@ impl Chat {
         self.text_box.set_width(new_width - 20, renderer);
     }
 
+    pub fn toggle_open(&mut self, keyboard: &mut Keyboard, window: &Window, window_size: Vec2) -> anyhow::Result<()> {
+        if self.chat_open {
+            println!("Closing chat");
+            self.chat_open = false;
+
+            self.text_box.reset();
+            self.message_browser_idx = usize::MAX;
+            
+            keyboard.exit_text_input_mode();
+    
+            window.set_cursor_position(LogicalPosition::new(window_size.x as i32 / 2, window_size.y as i32 / 2))?;
+            window.set_cursor_grab(winit::window::CursorGrabMode::Confined)?;
+            window.set_cursor_visible(false);
+        } else {
+            self.chat_open = true;
+            println!("Entering text input mode");
+
+            keyboard.enter_text_input_mode();
+
+            window.set_cursor_position(LogicalPosition::new(window_size.x as i32 / 2, window_size.y as i32 / 2))?;
+            window.set_cursor_grab(winit::window::CursorGrabMode::None)?;
+            window.set_cursor_visible(true);
+        }
+        Ok(())
+    }
+
     pub fn is_open(&self) -> bool {
         self.chat_open
     }
@@ -201,13 +228,9 @@ pub fn process_text_input(
     win_size: &WindowSize,
     window: &Window,
     time_secs: f32,
-) {
-    if !keyboard.is_in_text_input_mode() && keyboard.release(Key::Return) {
-        keyboard.enter_text_input_mode();
-        chat.chat_open = true;
-
-        let _ = window.set_cursor_grab(winit::window::CursorGrabMode::None);
-        window.set_cursor_visible(true);
+) -> anyhow::Result<()> {
+    if !keyboard.is_in_text_input_mode() && keyboard.release(Key::Return) && !chat.is_open() {
+        chat.toggle_open(keyboard, window, win_size.xy)?;
     }
 
     CHAT_QUEUE
@@ -219,7 +242,7 @@ pub fn process_text_input(
         });
 
     if !chat.chat_open {
-        return;
+        return Ok(());
     }
 
     // +1 if up pressed, 0 if both pressed, -1 if down pressed
@@ -297,14 +320,9 @@ pub fn process_text_input(
             }
         }
 
-        chat.text_box.reset();
-        keyboard.exit_text_input_mode();
-        chat.chat_open = false;
-        chat.message_browser_idx = usize::MAX;
-
-        window.set_cursor_grab(winit::window::CursorGrabMode::Confined).unwrap();
-        window.set_cursor_visible(false);
+        chat.toggle_open(keyboard, window, win_size.xy)?;
     }
+    Ok(())
 }
 
 fn trim_message(mut msg: &[char]) -> &[char] {

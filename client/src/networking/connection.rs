@@ -122,7 +122,7 @@ pub(super) mod entity_state {
         x NumEntries (Sorted ascending by entity id) 
     */
 
-    use shared::{bits_and_bytes::{BitReader, ByteWriter}, protocol::NetworkId};
+    use shared::{bits_and_bytes::{BitReader, ByteWriter}, protocol::{NetworkId, decode_velocity, decode_angle_rad}};
 
     use super::*;
 
@@ -133,58 +133,33 @@ pub(super) mod entity_state {
         buf.resize(2048, 0);
 
         generic_recv_driver(incoming, 8192, move |mut stream| {
-            let mut reader = BitReader::new(stream.bytes());
-            if stream.bytes_remaining() < 3 {
+            if stream.bytes_remaining() < 2 {
                 return NotEnoughData;
             }
 
-            let len = reader.uint(11) as usize + 3;
-            //println!("Received {len} bytes of entity state data. Buffered: {}", stream.bytes_remaining());
+            let len = stream.read_u16() as usize;
             if stream.bytes_remaining() < len {
                 return NotEnoughData;
             }
 
-            let word = ByteReader::new(stream.bytes()).read_u64();
-            let word2 = BitReader::new(stream.bytes()).uint(32);
-
+            let mut stream = ByteReader::new(&stream.bytes()[..len]);
             let mut writer = ByteWriter::new(&mut buf);
 
-            let entries = reader.uint(13);
-            //println!("Entries: {entries}, word: {word} vs {word2}");
-            for _ in 0..entries {
-                writer.write_u16(reader.uint(16) as u16);
-                let x = ((reader.uint(8) as i32 - 128) as f32 / 500.0);
-                let y = ((reader.uint(8) as i32 - 128) as f32 / 500.0);
-                let z = ((reader.uint(8) as i32 - 128) as f32 / 500.0);
-
-                //println!("Delta: {x:.8}, {y:.8}, {z:.8}");
-
-                writer.write_f32(x);
-                writer.write_f32(y);
-                writer.write_f32(z);
+            while stream.has_n_more(12) {
+                writer.write_u16(stream.read_u16());
+                writer.write_f32(decode_velocity(stream.read_u16() as u32));
+                writer.write_f32(decode_velocity(stream.read_u16() as u32));
+                writer.write_f32(decode_velocity(stream.read_u16() as u32));
+                writer.write_f32(decode_angle_rad(stream.read_u16()));
+                writer.write_f32(decode_angle_rad(stream.read_u16()));
             }
 
-            let len = writer.bytes_written();
-            to_main.send((&buf[..len]).to_vec()).unwrap();
-            
-            Consumed(len)
-            /* if stream.bytes_remaining() < 2 {
-                return MessageStatus::NotEnoughData;
+            let written = writer.bytes_written();
+            if written > 0 {
+                to_main.send((&buf[..written]).to_vec()).unwrap();
             }
 
-            let length = stream.read_u16() as usize;
-            if stream.bytes_remaining() < length {
-                return MessageStatus::NotEnoughData;
-            }
-
-            let mut data = Vec::new(); data.resize(length, 0u8);
-            stream.read(&mut data[..]);
-
-            if to_main.send(data).is_err() {
-                MessageStatus::Error
-            } else {
-                MessageStatus::Consumed(stream.bytes_read())
-            } */
+            Consumed(len + 2)
         })
         .await
     }

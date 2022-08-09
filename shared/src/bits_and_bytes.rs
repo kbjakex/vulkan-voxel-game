@@ -458,13 +458,11 @@ impl<'a> BitWriter<'a> {
     }
 
     #[inline]
-    #[cold]
     pub fn bits_written(&self) -> usize {
         self.bits_written
     }
 
     #[inline]
-    #[cold]
     pub fn compute_bytes_written(&self) -> usize {
         (self.bits_written + 7) / 8 
     }
@@ -521,14 +519,5 @@ mod tests {
         assert_eq!(reader.uint(32), 0);
         assert_eq!(reader.uint(32), 0);
         assert_eq!(reader.uint(32), 0);
-    }
-
-    #[test]
-    fn specific_test() {
-        let mut buf = 8817576293760u64.to_be_bytes();
-
-        let mut reader = super::BitReader::new(&mut buf);
-        assert_eq!(5, reader.uint(11));
-        assert_eq!(1, reader.uint(13));
     }
 }

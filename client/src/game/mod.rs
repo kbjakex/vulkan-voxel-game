@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use erupt::vk;
 use glam::{Vec2, Vec3};
-use rayon::{prelude::IntoParallelIterator, ThreadPoolBuilder};
+use rayon::ThreadPoolBuilder;
 use winit::{
     dpi::{LogicalPosition, LogicalSize, PhysicalSize},
     event::{Event, WindowEvent},
@@ -23,7 +23,7 @@ use crate::{
     },
 };
 
-use self::states::{connection_lost::ConnectionLostState, username_query::UsernameQueryState};
+use self::states::username_query::UsernameQueryState;
 
 pub trait State {
     fn on_enter(&mut self, resources: &mut Resources) -> anyhow::Result<()>;
@@ -188,7 +188,7 @@ impl Game {
             .unwrap();
 
         let time = Instant::now();
-        let default_camera = Camera::new(Vec3::ZERO, Vec2::new(400.0, 480.0));
+        let default_camera = Camera::new(Vec3::ZERO, Vec2::new(400.0, 480.0), f32::to_radians(80.0));
         let renderer = renderer::init(&window, &default_camera)?;
         //window.set_inner_size(LogicalSize::new(512, 512));
 
