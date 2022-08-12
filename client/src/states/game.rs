@@ -121,9 +121,10 @@ impl State for GameState {
         None
     }
 
-    fn on_exit(&mut self, _res: &mut Resources) -> anyhow::Result<()> {
+    fn on_exit(&mut self, res: &mut Resources) -> anyhow::Result<()> {
         println!("Exiting GameState");
         self.res.net.connection.send_disconnect();
+        res.input.keyboard.clear_all();
         Ok(())
     }
 
@@ -237,15 +238,15 @@ impl GameState {
                         );
                     },
                     S2C::EntityState(bytes) => {
-                        Self::process_entity_state_msg(&mut self.res.entities, net, res, bytes);
+                        Self::process_entity_state_msg(&mut self.res.entities, net, bytes);
                     },
                 }
             }
         }
     }
 
-    fn process_entity_state_msg(ecs: &mut ECS, net: &mut Net, res: &mut Resources, mut bytes: Box<[u8]>) {
-        println!("Received at {}", res.time.secs_f32);
+    fn process_entity_state_msg(ecs: &mut ECS, net: &mut Net, mut bytes: Box<[u8]>) {
+        //println!("Received at {}", res.time.secs_f32);
         let mut reader = ByteReader::new(&mut bytes);
         while reader.bytes_remaining() > 0 {
             let id = NetworkId::from_raw(reader.read_u16());
@@ -298,7 +299,7 @@ impl GameState {
     fn open_chat(&mut self, res: &mut Resources) {
         if !self.res.chat.is_open() {
             res.input.keyboard.clear_all();
-            self.res.chat.toggle_open(&res.window_handle, &res.window_size);
+            self.res.chat.toggle_open(&res.window_handle, &res.window_size, res.time.secs_f32);
         }
     }
 
@@ -673,65 +674,28 @@ fn create_debug_grid(vk: &mut VkContext) -> anyhow::Result<VertexBuffer> {
     })
 }
 
+#[rustfmt::skip]
 fn create_debug_cube(vk: &mut VkContext) -> anyhow::Result<VertexBuffer> {
     let mut vertices: Vec<Vertex> = Vec::new();
 
     let corners = [
-        Vertex {
-            pos: Vec3::new(-0.5, -0.5, -0.5),
-            col: Vec3::ZERO,
-            uv: Vec2::ZERO,
-        },
-        Vertex {
-            pos: Vec3::new(-0.5, -0.5, 0.5),
-            col: Vec3::ZERO,
-            uv: Vec2::ZERO,
-        },
-        Vertex {
-            pos: Vec3::new(-0.5, 0.5, -0.5),
-            col: Vec3::ZERO,
-            uv: Vec2::ZERO,
-        },
-        Vertex {
-            pos: Vec3::new(-0.5, 0.5, 0.5),
-            col: Vec3::ZERO,
-            uv: Vec2::ZERO,
-        },
-        Vertex {
-            pos: Vec3::new(0.5, -0.5, -0.5),
-            col: Vec3::ZERO,
-            uv: Vec2::ZERO,
-        },
-        Vertex {
-            pos: Vec3::new(0.5, -0.5, 0.5),
-            col: Vec3::ZERO,
-            uv: Vec2::ZERO,
-        },
-        Vertex {
-            pos: Vec3::new(0.5, 0.5, -0.5),
-            col: Vec3::ZERO,
-            uv: Vec2::ZERO,
-        },
-        Vertex {
-            pos: Vec3::new(0.5, 0.5, 0.5),
-            col: Vec3::ZERO,
-            uv: Vec2::ZERO,
-        },
+        Vertex { pos: Vec3::new(-0.5, -0.5, -0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
+        Vertex { pos: Vec3::new(-0.5, -0.5, 0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
+        Vertex { pos: Vec3::new(-0.5, 0.5, -0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
+        Vertex { pos: Vec3::new(-0.5, 0.5, 0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
+        Vertex { pos: Vec3::new(0.5, -0.5, -0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
+        Vertex { pos: Vec3::new(0.5, -0.5, 0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
+        Vertex { pos: Vec3::new(0.5, 0.5, -0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
+        Vertex { pos: Vec3::new(0.5, 0.5, 0.5), col: Vec3::ZERO, uv: Vec2::ZERO },
     ];
 
     let indices = [
-        [0, 1, 2],
-        [2, 1, 3], // -X
-        [4, 6, 5],
-        [5, 6, 7], // +X
-        [0, 2, 4],
-        [4, 2, 6], // -Z
-        [1, 5, 3],
-        [3, 5, 7], // +Z
-        [2, 3, 6],
-        [6, 3, 7], // +Y
-        [0, 4, 1],
-        [1, 4, 5], // -Y
+        [0, 1, 2], [2, 1, 3], // -X
+        [4, 6, 5], [5, 6, 7], // +X
+        [0, 2, 4], [4, 2, 6], // -Z
+        [1, 5, 3], [3, 5, 7], // +Z
+        [2, 3, 6], [6, 3, 7], // +Y
+        [0, 4, 1], [1, 4, 5], // -Y
     ];
 
     for i in indices.iter().flatten().copied() {

@@ -45,9 +45,9 @@ impl State for UsernameQueryState {
 
         let text = res.renderer.ui.text();
         self.username_box
-            .set_contents(&"jetp250".chars().collect::<Vec<char>>(), text);
+            .set_contents(&"jetp250".chars().collect::<Vec<char>>(), text, res.time.secs_f32);
         self.address_box
-            .set_contents(&"localhost:29477".chars().collect::<Vec<char>>(), text);
+            .set_contents(&"localhost:29477".chars().collect::<Vec<char>>(), text, res.time.secs_f32);
         self.selected = 2;
 
         Ok(())
@@ -137,11 +137,14 @@ impl State for UsernameQueryState {
 
     fn on_exit(&mut self, res: &mut crate::resources::Resources) -> anyhow::Result<()> {
         res.window_handle.set_cursor_icon(CursorIcon::Default);
+        res.input.keyboard.clear_all();
         Ok(())
     }
 
     fn on_event(&mut self, event: &Event<()>, res: &mut Resources) -> Option<Box<StateChange>> {
-        input::handle_event(event, &mut res.input);
+        if input::handle_event(event, &mut res.input) {
+            return None;
+        }
 
         if let Event::WindowEvent { event, .. } = event {
             match self.selected {

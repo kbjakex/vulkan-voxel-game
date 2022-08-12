@@ -8,7 +8,7 @@ use winit::{
 
 use crate::{
     game::{State, StateChange},
-    input::Key,
+    input::{Key, self},
     renderer::{
         renderer::{Clear, OutdatedSwapchain, RendererState},
         text_renderer::TextColor,
@@ -70,10 +70,15 @@ impl State for ConnectionLostState {
 
     fn on_exit(&mut self, res: &mut crate::resources::Resources) -> anyhow::Result<()> {
         res.window_handle.set_cursor_icon(CursorIcon::Default);
+        res.input.keyboard.clear_all();
         Ok(())
     }
 
     fn on_event(&mut self, event: &Event<()>, res: &mut Resources) -> Option<Box<StateChange>> {
+        if input::handle_event(event, &mut res.input) {
+            return None;
+        }
+
         match event {
             Event::WindowEvent {
                 event: WindowEvent::CursorMoved { position, .. },

@@ -194,8 +194,8 @@ impl TextBox {
         &self.buffer[sel.start as usize..sel.end as usize]
     }
 
-    pub fn set_contents(&mut self, text: &[char], text_renderer: &TextRenderer) {
-        self.reset();
+    pub fn set_contents(&mut self, text: &[char], text_renderer: &TextRenderer, time_secs: f32) {
+        self.reset(time_secs);
         self.buffer.extend_from_slice(&text);
         self.buffer.retain(|c| self.valid_chars.contains(c));
         self.cursor_pos = self.buffer.len() as i32;
@@ -206,12 +206,13 @@ impl TextBox {
         self.visible_start = self.visible_start.max(start);
     }
 
-    pub fn reset(&mut self) {
+    pub fn reset(&mut self, time_secs: f32) {
         self.buffer.clear();
         self.selection.clear_to(0);
         self.cursor_pos = 0;
         self.modified = false;
         self.visible_start = 0;
+        self.last_keypress = time_secs;
     }
 }
 
@@ -220,7 +221,7 @@ impl TextBox {
     pub fn process_event(&mut self, event: &WindowEvent, res: &mut Resources) -> bool {
         match event {
             &WindowEvent::ReceivedCharacter(char) => {
-                self.process_char_input(char, res.input.keyboard_mods);
+                self.process_char_input(char, res.input.keyboard_mods, res.time.secs_f32);
             }
             &WindowEvent::KeyboardInput {
                 input:
@@ -353,7 +354,7 @@ impl TextBox {
         true
     }
 
-    fn process_char_input(&mut self, c: char, mods: ModifiersState) {
+    fn process_char_input(&mut self, c: char, mods: ModifiersState, time_secs: f32) {
         if c == BACKSPACE {
             if self.cursor_pos == 0 || !self.selection.is_empty() {
                 self.erase_selection();
@@ -382,6 +383,7 @@ impl TextBox {
             self.buffer.insert(self.cursor_pos as usize, c);
             self.clear_to(self.cursor_pos + 1);
             self.modified = true;
+            self.last_keypress = time_secs;
         }
     }
 

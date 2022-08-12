@@ -91,11 +91,11 @@ impl Chat {
         });
     }
 
-    pub fn toggle_open(&mut self, window: &Window, window_size: &WindowSize) {
+    pub fn toggle_open(&mut self, window: &Window, window_size: &WindowSize, time_secs: f32) {
         if self.chat_open {
             self.chat_open = false;
 
-            self.text_box.reset();
+            self.text_box.reset(time_secs);
             self.message_browser_idx = None;
 
             Self::set_grab_and_center(window, window_size.xy, CursorGrabMode::Confined);
@@ -103,6 +103,7 @@ impl Chat {
         } else {
             self.chat_open = true;
 
+            self.text_box.reset(time_secs);
             Self::set_grab_and_center(window, window_size.xy, CursorGrabMode::None);
             window.set_cursor_visible(true);
         }
@@ -132,17 +133,30 @@ impl Chat {
         res: &mut Resources,
         connection: &mut Connection,
     ) -> bool {
+        if let WindowEvent::Resized(new_size) = event {
+            self.text_box.set_width(
+                (new_size.width as u16).saturating_sub(20),
+                res.renderer.ui.text(),
+            );
+            return false;
+        }
+
         if !self.is_open() {
             return false;
         }
 
         match event {
-            WindowEvent::Resized(new_size) => {
-                self.text_box.set_width(
-                    (new_size.width as u16).saturating_sub(20),
-                    res.renderer.ui.text(),
-                );
-                false
+            &WindowEvent::KeyboardInput {
+                input:
+                    KeyboardInput {
+                        virtual_keycode: Some(Key::Escape),
+                        state: ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => {
+                self.toggle_open(&res.window_handle, &res.window_size, res.time.secs_f32);
+                true
             }
             &WindowEvent::KeyboardInput {
                 input:
@@ -158,10 +172,10 @@ impl Chat {
                 if let Some(idx) = self.message_browser_idx.as_mut() {
                     *idx = (*idx + 1).min(self.own_messages.len());
                     if *idx == self.own_messages.len() {
-                        self.text_box.set_contents(&[], res.renderer.ui.text());
+                        self.text_box.set_contents(&[], res.renderer.ui.text(), res.time.secs_f32);
                     } else {
                         self.text_box
-                            .set_contents(&self.own_messages[*idx], res.renderer.ui.text());
+                            .set_contents(&self.own_messages[*idx], res.renderer.ui.text(), res.time.secs_f32);
                     }
                 }
                 true
@@ -186,6 +200,7 @@ impl Chat {
                 self.text_box.set_contents(
                     &self.own_messages[self.message_browser_idx.unwrap()],
                     res.renderer.ui.text(),
+                    res.time.secs_f32
                 );
                 true
             }
@@ -212,7 +227,7 @@ impl Chat {
                         );
                     }
                 }
-                let _ = self.toggle_open(&res.window_handle, &res.window_size);
+                let _ = self.toggle_open(&res.window_handle, &res.window_size, res.time.secs_f32);
                 true
             }
             event => {

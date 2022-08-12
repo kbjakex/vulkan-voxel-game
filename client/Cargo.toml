@@ -5,9 +5,9 @@ edition = "2021"
 
 [dependencies]
 erupt = "0.22.0"
-winit = { version = "0.27.1", default-features = false, features = ["x11"] }
+winit = { version = "0.27.2", default-features = false, features = ["x11"] }
 smallvec = "1.9.0"
-anyhow = "1.0.59"
+anyhow = "1.0.61"
 glam = { version = "0.21.3", features = ["bytemuck"] }
 lz4 = "1.23.3"
 rand = "0.8.5"
