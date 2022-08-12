@@ -16,6 +16,8 @@ pub type RawNetworkId = u16;
 pub struct NetworkId(RawNetworkId);
 
 impl NetworkId {
+    pub const INVALID : NetworkId = Self::from_raw(0);
+
     pub const fn from_raw(raw: RawNetworkId) -> Self {
         Self(raw)
     }
@@ -50,10 +52,8 @@ pub fn wrap_angle(angle: f32) -> f32 {
     angle
 }
 
-const ANGLE_ENCODE_CONSTANT : f64 = (1 << 16) as f64 / std::f64::consts::TAU;
-
 /// Input MUST be in range [-PI, PI]. Unexpected outputs otherwise
-pub fn encode_angle_rad(mut angle: f32) -> u16 {
+pub fn encode_angle_rad(angle: f32) -> u16 {
     debug_assert!((-PI..=PI).contains(&angle));
     let mut angle = angle;
     angle += std::f32::consts::PI;
@@ -84,12 +84,9 @@ pub fn decode_velocity(coord: u32) -> f32 {
 }
 
 mod tests {
-    use super::{decode_velocity, encode_velocity, decode_angle_rad, encode_angle_rad, wrap_angle};
-
-    
     #[test]
     fn test_angles() {
-        use super::*;
+        use super::{decode_angle_rad, encode_angle_rad};
         let angle1 = f32::to_radians(170.0);
         let angle2 = f32::to_radians(-170.0);
         let angle3 = f32::to_radians(-0.0);
@@ -123,6 +120,7 @@ mod tests {
 
     #[test]
     fn test_angle_roundtrip() {
+        use super::{decode_angle_rad, encode_angle_rad, wrap_angle};
         for f in [0.312150524, -1.23412518, 3.141152987, -3.141241898, 0.0, 2.31218427918] {
             let f1 = decode_angle_rad(encode_angle_rad(wrap_angle(f)));
             println!("f {f}, f1 {f1}");
@@ -140,6 +138,7 @@ mod tests {
 
     #[test]
     fn test_velocity_roundtrip() {
+        use super::{decode_velocity, encode_velocity};
         for f in [0.31241825, 0.9128419874, 15.12491874, -4.23147942, 0.512571958] {
             let f1 = decode_velocity(encode_velocity(f));
             println!("f {f}, f1 {f1}");

@@ -1,8 +1,8 @@
 use glam::IVec3;
 
-use super::block::{Block, BlockId};
+use super::block::Block;
 
-pub const CHUNK_SIZE_LOG2 : usize = 4;
+pub const CHUNK_SIZE_LOG2: usize = 4;
 pub const CHUNK_SIZE: usize = 1 << CHUNK_SIZE_LOG2;
 pub const CHUNK_VOLUME: usize = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
 
@@ -18,9 +18,11 @@ pub trait WorldBlockPosExt {
 
 impl WorldBlockPosExt for WorldBlockPos {
     fn to_block_index(self) -> usize {
-        const XZ_BITS : usize = 24;
+        const XZ_BITS: usize = 24;
 
-        ((self.y as u32 as usize) << (2*XZ_BITS)) | ((self.z as u32 as usize) << XZ_BITS) | (self.x as u32 as usize)
+        ((self.y as u32 as usize) << (2 * XZ_BITS))
+            | ((self.z as u32 as usize) << XZ_BITS)
+            | (self.x as u32 as usize)
     }
 
     fn to_local(self) -> ChunkBlockPos {
@@ -37,14 +39,19 @@ pub struct ChunkBlockPos {
     pub x: u8,
     pub y: u8,
     pub z: u8,
-    pub extra: u8
+    pub extra: u8,
 }
 
 impl ChunkBlockPos {
-    pub const COORD_MASK : u8 = CHUNK_SIZE as u8 - 1;
+    pub const COORD_MASK: u8 = CHUNK_SIZE as u8 - 1;
 
     pub const fn new(x: u8, y: u8, z: u8) -> Self {
-        Self { x: x & Self::COORD_MASK, y: y & Self::COORD_MASK, z: z & Self::COORD_MASK, extra: 0 }
+        Self {
+            x: x & Self::COORD_MASK,
+            y: y & Self::COORD_MASK,
+            z: z & Self::COORD_MASK,
+            extra: 0,
+        }
     }
 
     pub const fn to_block_index(self) -> usize {
@@ -52,7 +59,10 @@ impl ChunkBlockPos {
     }
 }
 
-impl<T> From<(T, T, T)> for ChunkBlockPos where T: Into<u8> {
+impl<T> From<(T, T, T)> for ChunkBlockPos
+where
+    T: Into<u8>,
+{
     fn from((x, y, z): (T, T, T)) -> Self {
         Self::new(x.into(), y.into(), z.into())
     }
@@ -70,7 +80,7 @@ pub struct Chunk {
     // Id of the 2³ chunk group this chunk belongs to
     pub group_id: thunderdome::Index,
 
-    pub neighbor_indices: [u32; 6]
+    pub neighbor_indices: [u32; 6],
 }
 
 impl Chunk {
@@ -89,7 +99,10 @@ impl Chunk {
         // For some reason, the compiler does not optimize the memset away,
         // even though Block is made of zero bytes and the memory is already
         // zero-initialized.
-        const _: () = assert!(Block::AIR.raw() == 0, "Chunk::new(): air block no longer zero, needs memset");
+        const _: () = assert!(
+            Block::AIR.raw() == 0,
+            "Chunk::new(): air block no longer zero, needs memset"
+        );
         // boxed.blocks.fill(Block::new(BlockId::AIR));
 
         boxed
@@ -106,17 +119,20 @@ impl Chunk {
 
 impl std::ops::Index<usize> for Chunk {
     type Output = Block;
-    
+
     fn index(&self, index: usize) -> &Self::Output {
         &self.blocks[index]
     }
 }
 
-impl<T> std::ops::Index<T> for Chunk where T: Into<ChunkBlockPos> {
+impl<T> std::ops::Index<T> for Chunk
+where
+    T: Into<ChunkBlockPos>,
+{
     type Output = Block;
 
     fn index(&self, index: T) -> &Self::Output {
-        let pos : ChunkBlockPos = index.into();
+        let pos: ChunkBlockPos = index.into();
         &self[pos.to_block_index()]
     }
 }
@@ -127,9 +143,12 @@ impl std::ops::IndexMut<usize> for Chunk {
     }
 }
 
-impl<T> std::ops::IndexMut<T> for Chunk where T: Into<ChunkBlockPos> {
+impl<T> std::ops::IndexMut<T> for Chunk
+where
+    T: Into<ChunkBlockPos>,
+{
     fn index_mut(&mut self, index: T) -> &mut Self::Output {
-        let pos : ChunkBlockPos = index.into();
+        let pos: ChunkBlockPos = index.into();
         &mut self[pos.to_block_index()]
     }
 }
@@ -137,6 +156,10 @@ impl<T> std::ops::IndexMut<T> for Chunk where T: Into<ChunkBlockPos> {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ChunkFace {
-    NX, NY, NZ, PX, PY, PZ
+    NX,
+    NY,
+    NZ,
+    PX,
+    PY,
+    PZ,
 }
-

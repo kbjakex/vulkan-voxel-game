@@ -98,7 +98,7 @@ pub fn create_render_pass(vk: &VkContext, fbs: &FramebufferImages) -> Result<Ren
 pub fn create_pipelines(
     pass: &RenderPass,
     vk: &VkContext,
-    descriptors: &DescriptorSets
+    descriptors: &DescriptorSets,
 ) -> anyhow::Result<Pipeline> {
     use vk::ColorComponentFlags as CCF;
     vk.graphics_pipeline_builder()
@@ -109,7 +109,7 @@ pub fn create_pipelines(
             vk::PipelineRasterizationStateCreateInfoBuilder::new()
                 .cull_mode(vk::CullModeFlags::BACK)
                 .line_width(1.0)
-                .polygon_mode(vk::PolygonMode::LINE)
+                .polygon_mode(vk::PolygonMode::FILL)
                 .depth_bias_enable(false)
                 .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
                 .rasterizer_discard_enable(false),

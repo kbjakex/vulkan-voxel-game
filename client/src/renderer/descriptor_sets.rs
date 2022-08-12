@@ -1,7 +1,9 @@
-
 use erupt::vk;
-use glam::{Vec2, Mat4};
-use vkcore::{BufferAllocation, Uploader, Device, VkAllocator, Image, ImageAllocation, Buffer, UsageFlags, VkContext};
+use glam::{Mat4, Vec2};
+use vkcore::{
+    Buffer, BufferAllocation, Device, Image, ImageAllocation, Uploader, UsageFlags, VkAllocator,
+    VkContext,
+};
 
 use anyhow::Result;
 
@@ -36,11 +38,11 @@ impl DescriptorSets {
             )
         }
         .result()?;
-    
+
         let textures = Textures::create(&vk.device, pool, &mut vk.uploader, &mut vk.allocator)?;
         let text_rendering = TextBuffers::create(&vk.device, pool)?;
         let attachments = InputAttachments::create(&vk.device, pool, &mut vk.allocator)?;
-    
+
         Ok(DescriptorSets {
             pool,
             textures,
@@ -146,22 +148,24 @@ impl Textures {
 
         unsafe {
             device.update_descriptor_sets(
-                &[vk::WriteDescriptorSetBuilder::new()
-                    .dst_binding(0)
-                    .dst_set(descriptor_set)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&[vk::DescriptorImageInfoBuilder::new()
-                        .image_view(texture.view)
-                        .sampler(sampler)
-                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]),
+                &[
                     vk::WriteDescriptorSetBuilder::new()
-                    .dst_binding(1)
-                    .dst_set(descriptor_set)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&[vk::DescriptorImageInfoBuilder::new()
-                        .image_view(text_texture.view)
-                        .sampler(text_sampler)
-                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)])],
+                        .dst_binding(0)
+                        .dst_set(descriptor_set)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(&[vk::DescriptorImageInfoBuilder::new()
+                            .image_view(texture.view)
+                            .sampler(sampler)
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]),
+                    vk::WriteDescriptorSetBuilder::new()
+                        .dst_binding(1)
+                        .dst_set(descriptor_set)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(&[vk::DescriptorImageInfoBuilder::new()
+                            .image_view(text_texture.view)
+                            .sampler(text_sampler)
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]),
+                ],
                 &[],
             );
         }
@@ -221,7 +225,11 @@ impl Textures {
         Ok(img)
     }
 
-    fn load_text_atlas(device: &Device, uploader: &mut Uploader, allocator: &mut VkAllocator) -> Result<Image> {
+    fn load_text_atlas(
+        device: &Device,
+        uploader: &mut Uploader,
+        allocator: &mut VkAllocator,
+    ) -> Result<Image> {
         let data = lz4::block::decompress(assets::text::TEXTURE_ATLAS, None)?;
 
         let mut img = allocator.allocate_image(
@@ -231,8 +239,8 @@ impl Textures {
                 layers: 1,
                 mip_levels: 1,
                 extent: vk::Extent2D {
-                    width: 16*8,
-                    height: 16*8,
+                    width: 16 * 8,
+                    height: 16 * 8,
                 },
                 usage: UsageFlags::FAST_DEVICE_ACCESS,
                 flags: vk::ImageAspectFlags::COLOR,
@@ -276,10 +284,7 @@ pub struct TextBuffers {
 }
 
 impl TextBuffers {
-    fn create(
-        device: &Device,
-        pool: vk::DescriptorPool,
-    ) -> Result<Self> {
+    fn create(device: &Device, pool: vk::DescriptorPool) -> Result<Self> {
         let layout = unsafe {
             device.create_descriptor_set_layout(
                 &vk::DescriptorSetLayoutCreateInfoBuilder::new().bindings(&[
@@ -332,7 +337,6 @@ pub struct InputAttachments {
 
     /* pub sky_layout: vk::DescriptorSetLayout,
     pub sky_descriptor_set: vk::DescriptorSet, */
-
     pub luma_layout: vk::DescriptorSetLayout,
     pub luma_descriptor_set: vk::DescriptorSet,
 

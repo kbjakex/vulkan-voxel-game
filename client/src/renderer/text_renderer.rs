@@ -6,14 +6,12 @@ use erupt::vk;
 use anyhow::Result;
 use glam::Mat4;
 use smallvec::SmallVec;
-use vkcore::{
-    Buffer, BufferAllocation, UsageFlags,
-    VkContext, Device,
-};
+use vkcore::{Buffer, BufferAllocation, Device, UsageFlags, VkContext};
 
 use super::{
     descriptor_sets::DescriptorSets,
-    renderer::{FRAMES_IN_FLIGHT, RenderContext}, pipelines::Pipelines,
+    pipelines::Pipelines,
+    renderer::{RenderContext, FRAMES_IN_FLIGHT},
 };
 
 const DEFAULT_TEXT_COLOR: TextColor = TextColor::from_rgba(0xFF, 0xFF, 0xFF, 0xFF);
@@ -66,6 +64,12 @@ impl TextColor {
 impl Default for TextColor {
     fn default() -> Self {
         Self::from_rgba(255, 255, 255, 255)
+    }
+}
+
+impl From<u32> for TextColor {
+    fn from(rgba: u32) -> Self {
+        Self::from_rgba32(rgba)
     }
 }
 
@@ -202,8 +206,14 @@ impl TextRenderer {
     // area in pixels
     pub fn apply_scissors(&mut self, (x, y): (u16, u16), (w, h): (u16, u16)) {
         self.apply_scissors_rect(vk::Rect2D {
-            offset: vk::Offset2D { x: x as _, y: y as _ },
-            extent: vk::Extent2D { width: w as _, height: h as _ },
+            offset: vk::Offset2D {
+                x: x as _,
+                y: y as _,
+            },
+            extent: vk::Extent2D {
+                width: w as _,
+                height: h as _,
+            },
         });
     }
 
@@ -276,7 +286,6 @@ impl TextRenderer {
             x = x.wrapping_add(glyph.advance as u32 * 3);
         }
 
-
         let x_offset = match style.align {
             Align::Left => 0,
             Align::Center => x / 2,
@@ -294,7 +303,11 @@ impl TextRenderer {
         self.compute_glyph_idx_at_pos_chars(str.chars(), pos_px)
     }
 
-    pub fn compute_glyph_idx_at_pos_chars(&self, str: impl Iterator<Item = char>, pos_px: u16) -> usize {
+    pub fn compute_glyph_idx_at_pos_chars(
+        &self,
+        str: impl Iterator<Item = char>,
+        pos_px: u16,
+    ) -> usize {
         let glyphs = &self.glyphs[0..255];
         let pos_px = pos_px as u32;
         let mut x = 0;
@@ -302,7 +315,7 @@ impl TextRenderer {
         for c in str {
             let advance = glyphs[c as usize].advance as u32 * 3;
 
-            if pos_px <= x + advance/2 {
+            if pos_px <= x + advance / 2 {
                 return idx;
             }
             if pos_px <= x + advance {
@@ -439,7 +452,13 @@ impl TextRenderer {
         Ok(())
     }
 
-    pub fn render(renderer: &mut TextRenderer, device: &Device, pipelines: &Pipelines, descriptors: &DescriptorSets, ctx: &RenderContext) {
+    pub fn render(
+        renderer: &mut TextRenderer,
+        device: &Device,
+        pipelines: &Pipelines,
+        descriptors: &DescriptorSets,
+        ctx: &RenderContext,
+    ) {
         unsafe {
             device.cmd_bind_pipeline(
                 ctx.commands,

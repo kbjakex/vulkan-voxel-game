@@ -1,7 +1,6 @@
 use std::net::ToSocketAddrs;
 
 use anyhow::bail;
-use bevy_utils::HashSet;
 use erupt::vk;
 use flexstr::ToSharedStr;
 use winit::{
@@ -11,7 +10,7 @@ use winit::{
 
 use crate::{
     game::{State, StateChange},
-    input::Key,
+    input::{self, Key},
     networking::Connecting,
     renderer::{
         renderer::{Clear, OutdatedSwapchain, RendererState},
@@ -41,15 +40,14 @@ pub struct UsernameQueryState {
 
 impl State for UsernameQueryState {
     fn on_enter(&mut self, res: &mut crate::resources::Resources) -> anyhow::Result<()> {
-        res.input.keyboard.enter_text_input_mode();
         res.renderer
             .set_present_mode(vk::PresentModeKHR::FIFO_KHR)?; // strong vsync
 
         let text = res.renderer.ui.text();
         self.username_box
-            .set_contents("jetp250".chars().collect(), text);
+            .set_contents(&"jetp250".chars().collect::<Vec<char>>(), text);
         self.address_box
-            .set_contents("localhost:29477".chars().collect(), text);
+            .set_contents(&"localhost:29477".chars().collect::<Vec<char>>(), text);
         self.selected = 2;
 
         Ok(())
@@ -64,8 +62,31 @@ impl State for UsernameQueryState {
         }
 
         let renderer = &mut res.renderer;
-        let wsize = &res.window_size.extent;
+        let wsize = res.window_size.extent;
         let wsize = (wsize.width as u16, wsize.height as u16);
+
+        let mouse_pos = res.input.mouse.pos();
+        let hover = Self::get_hovering(
+            wsize,
+            (
+                mouse_pos.x as u16,
+                wsize.1.saturating_sub(mouse_pos.y as u16),
+            ),
+            self.connecting.is_some(),
+        );
+
+        if hover != self.hovered {
+            self.hovered = hover;
+            if hover != u32::MAX {
+                if (hover == 0 || hover == 1) && self.connecting.is_none() {
+                    res.window_handle.set_cursor_icon(CursorIcon::Text);
+                } else {
+                    res.window_handle.set_cursor_icon(CursorIcon::Hand);
+                }
+            } else {
+                res.window_handle.set_cursor_icon(CursorIcon::Default);
+            }
+        }
 
         let kb = &mut res.input.keyboard;
         if self.connecting.is_some() {
@@ -115,39 +136,26 @@ impl State for UsernameQueryState {
     }
 
     fn on_exit(&mut self, res: &mut crate::resources::Resources) -> anyhow::Result<()> {
-        res.input.keyboard.exit_text_input_mode();
         res.window_handle.set_cursor_icon(CursorIcon::Default);
         Ok(())
     }
 
     fn on_event(&mut self, event: &Event<()>, res: &mut Resources) -> Option<Box<StateChange>> {
-        match event {
-            Event::WindowEvent {
-                event: WindowEvent::CursorMoved { position, .. },
-                ..
-            } => {
-                let wsize = res.window_size.extent;
-                let wsize = (wsize.width as u16, wsize.height as u16);
+        input::handle_event(event, &mut res.input);
 
-                let hover = Self::get_hovering(
-                    wsize,
-                    (position.x as u16, wsize.1.saturating_sub(position.y as u16)),
-                    self.connecting.is_some(),
-                );
-
-                if hover != self.hovered {
-                    self.hovered = hover;
-                    if hover != u32::MAX {
-                        if (hover == 0 || hover == 1) && self.connecting.is_none() {
-                            res.window_handle.set_cursor_icon(CursorIcon::Text);
-                        } else {
-                            res.window_handle.set_cursor_icon(CursorIcon::Hand);
-                        }
-                    } else {
-                        res.window_handle.set_cursor_icon(CursorIcon::Default);
-                    }
+        if let Event::WindowEvent { event, .. } = event {
+            match self.selected {
+                0 => {
+                    self.username_box.process_event(event, res);
                 }
+                1 => {
+                    self.address_box.process_event(event, res);
+                }
+                _ => {}
             }
+        }
+
+        match event {
             Event::WindowEvent {
                 event: WindowEvent::MouseInput { state, button, .. },
                 ..
@@ -156,32 +164,34 @@ impl State for UsernameQueryState {
                     && *state == ElementState::Pressed
                     && *button == MouseButton::Left
                 {
-                    dbg![self.hovered, self.selected];
                     if self.selected != self.hovered {
                         res.input.mouse.release(MouseButton::Left);
                     }
                     self.selected = self.hovered;
 
-                    if self.connecting.is_some() && self.selected == 0 {
-                        self.connecting = None;
-                        self.selected = 2; // back to join button
-                        self.message.clear();
+                    if self.connecting.is_some() {
+                        if self.selected == 0 {
+                            self.connecting = None;
+                            self.selected = 2; // back to join button
+                            self.message.clear();
 
-                        let wsize = res.window_size.extent;
-                        let wsize = (wsize.width as u16, wsize.height as u16);
-                        let position = res.input.mouse.pos();
+                            let wsize = res.window_size.extent;
+                            let wsize = (wsize.width as u16, wsize.height as u16);
+                            let position = res.input.mouse.pos();
 
-                        self.hovered = Self::get_hovering(
-                            wsize,
-                            (position.x as u16, wsize.1.saturating_sub(position.y as u16)),
-                            self.connecting.is_some(),
-                        );
-                    }
-                    if self.hovered == 2 {
-                        self.press_join_button();
-                    }
-                    if self.hovered == 3 {
-                        return Some(Box::new(StateChange::Exit));
+                            self.hovered = Self::get_hovering(
+                                wsize,
+                                (position.x as u16, wsize.1.saturating_sub(position.y as u16)),
+                                self.connecting.is_some(),
+                            );
+                        }
+                    } else {
+                        if self.hovered == 2 {
+                            self.press_join_button();
+                        }
+                        if self.hovered == 3 {
+                            return Some(Box::new(StateChange::Exit));
+                        }
                     }
                 }
             }
@@ -194,7 +204,6 @@ impl State for UsernameQueryState {
 impl UsernameQueryState {
     fn process_inputs(&mut self, res: &mut Resources) -> Option<Box<StateChange>> {
         let inputs = &mut res.input;
-        let renderer = &mut res.renderer;
 
         if [2, 3].contains(&self.selected) {
             if inputs.keyboard.release(Key::Right) || inputs.keyboard.release(Key::Left) {
@@ -229,29 +238,6 @@ impl UsernameQueryState {
             return None;
         }
 
-        match self.selected {
-            0 => {
-                self.username_box.process_inputs(
-                    &mut inputs.keyboard,
-                    &mut inputs.mouse,
-                    &mut inputs.clipboard,
-                    renderer.ui.text(),
-                    res.window_size.extent.height as _,
-                    res.time.secs_f32,
-                );
-            }
-            1 => {
-                self.address_box.process_inputs(
-                    &mut inputs.keyboard,
-                    &mut inputs.mouse,
-                    &mut inputs.clipboard,
-                    renderer.ui.text(),
-                    res.window_size.extent.height as _,
-                    res.time.secs_f32,
-                );
-            }
-            _ => {}
-        }
         None
     }
 }
@@ -280,7 +266,7 @@ impl UsernameQueryState {
                     self.message = format!("No such address");
                     self.message_color = ERR_COLOR;
                     return;
-                },
+                }
             },
             Err(e) => {
                 self.message = format!("Invalid address: {e}");
@@ -550,12 +536,14 @@ impl UsernameQueryState {
 // Initialization
 impl UsernameQueryState {
     pub fn new() -> anyhow::Result<Self> {
-        let valid_username_chars =
-            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        let valid_username_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            .chars()
+            .collect();
+
+        let valid_address_chars =
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:[]."
                 .chars()
                 .collect();
-
-        let valid_address_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:[].".chars().collect();
 
         Ok(Self {
             username_box: TextBoxBuilder::new_at(93, 317)

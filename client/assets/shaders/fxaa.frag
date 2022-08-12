@@ -21,8 +21,8 @@ const float edgeStepSizes[3] = { 1.5, 2.0, 2.0 };
 const float lastEdgeStepGuess = 8.0;
 
 void main() {
-	/* outColor = texture(texColor, uv);
-	return; */
+	outColor = texture(texColor, uv);
+	return;
 
     float lum = texture(texLuma, uv).x;
 

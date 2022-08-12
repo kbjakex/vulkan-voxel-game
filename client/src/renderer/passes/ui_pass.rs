@@ -2,7 +2,7 @@ use erupt::vk;
 use glam::Vec2;
 use vkcore::{pipeline::Pipeline, RenderPass, VkContext};
 
-use crate::{assets, renderer::{descriptor_sets::DescriptorSets}};
+use crate::{assets, renderer::descriptor_sets::DescriptorSets};
 
 use anyhow::Result;
 
@@ -108,13 +108,14 @@ pub fn create_render_pass(vk: &VkContext) -> Result<UiRenderPasses> {
         },
     })?;
 
-    Ok(UiRenderPasses {
-        menu,
-        game,
-    })
+    Ok(UiRenderPasses { menu, game })
 }
 
-pub fn create_pipelines(pass: &RenderPass, vk: &VkContext, descriptors: &DescriptorSets) -> anyhow::Result<UiPipelines> {
+pub fn create_pipelines(
+    pass: &RenderPass,
+    vk: &VkContext,
+    descriptors: &DescriptorSets,
+) -> anyhow::Result<UiPipelines> {
     use vk::ColorComponentFlags as CCF;
     let ui_pipeline = vk
         .graphics_pipeline_builder()
@@ -226,7 +227,7 @@ pub fn create_pipelines(pass: &RenderPass, vk: &VkContext, descriptors: &Descrip
                 .stencil_test_enable(false),
         )
         .build()?;
-    
+
     Ok(UiPipelines {
         shapes: ui_pipeline,
         text: text_pipeline,
@@ -235,9 +236,13 @@ pub fn create_pipelines(pass: &RenderPass, vk: &VkContext, descriptors: &Descrip
 
 pub fn handle_window_resize(pass: &mut RenderPass, vk: &VkContext) {
     let extent = vk.swapchain.surface.extent;
-    pass.recreate_framebuffers(&vk.device, vkcore::FramebufferImages {
-        width: extent.width,
-        height: extent.height,
-        views: &vk.swapchain.image_views,
-    }, None);
+    pass.recreate_framebuffers(
+        &vk.device,
+        vkcore::FramebufferImages {
+            width: extent.width,
+            height: extent.height,
+            views: &vk.swapchain.image_views,
+        },
+        None,
+    );
 }

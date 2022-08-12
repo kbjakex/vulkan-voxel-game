@@ -1,4 +1,3 @@
-
 // The file where all include_bytes!() invocations shall lie
 // because the path for include_bytes! is relative.
 
@@ -10,8 +9,14 @@ macro_rules! include_asset {
 
 macro_rules! include_shader {
     ($shader_name:literal) => {{
-        #[cfg(not(debug_assertions))] { include_asset!(concat!("shaders/bin/", $shader_name, ".spv")) }
-        #[cfg(    debug_assertions )] { include_asset!(concat!("shaders/bin/debug_", $shader_name, ".spv")) }
+        #[cfg(not(debug_assertions))]
+        {
+            include_asset!(concat!("shaders/bin/", $shader_name, ".spv"))
+        }
+        #[cfg(debug_assertions)]
+        {
+            include_asset!(concat!("shaders/bin/debug_", $shader_name, ".spv"))
+        }
     }};
 }
 
@@ -23,8 +28,8 @@ pub mod terrain_pipeline {
 pub mod text {
     pub const TEXT_SHADER_VERT: &[u8] = include_shader!("text.vert");
     pub const TEXT_SHADER_FRAG: &[u8] = include_shader!("text.frag");
-    pub const TEXTURE_ATLAS : &[u8] = include_asset!("fonts/font_atlas.bin");
-    pub const GLYPH_INFO : &[u8] = include_asset!("fonts/glyph_info.bin");
+    pub const TEXTURE_ATLAS: &[u8] = include_asset!("fonts/font_atlas.bin");
+    pub const GLYPH_INFO: &[u8] = include_asset!("fonts/glyph_info.bin");
 }
 
 pub mod postprocess_pipelines {
@@ -43,7 +48,6 @@ pub mod textures {
     // Lz4-HC compressed
     pub const TEXTURES: &[u8] = include_asset!("textures/packed.bin");
 }
-
 
 /* pub mod fonts {
     pub const TINYUNICODE: &[u8] = include_asset!("fonts/TinyUnicode.bin");

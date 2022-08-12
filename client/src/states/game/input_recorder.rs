@@ -1,7 +1,10 @@
 use std::f64::consts::PI;
 
-use glam::{Vec3, DVec3, DVec2, dvec3, vec2, Vec2, vec3};
-use shared::{TICKS_PER_SECOND, protocol::{decode_angle_rad, encode_angle_rad, encode_velocity, decode_velocity, wrap_angle}};
+use glam::{vec2, vec3, DVec2, DVec3, Vec2, Vec3};
+use shared::{
+    protocol::{decode_angle_rad, decode_velocity, encode_angle_rad, encode_velocity, wrap_angle},
+    TICKS_PER_SECOND,
+};
 use smallvec::SmallVec;
 
 use crate::components::{Position, Velocity};
@@ -17,7 +20,7 @@ pub struct Integrator {
     angle_origin: Vec2,
     prev_angle: DVec2,
     angle_accum: DVec2,
-    
+
     time_accum: f64,
     prev_dt: f64,
 }
@@ -38,13 +41,13 @@ impl Integrator {
 
     // `vel` should be premultiplied by dt. Angles are never multiplied by dt.
     pub fn step(
-        &mut self, 
-        vel: DVec3, 
-        yaw_pitch: DVec2, 
-        dt_secs: f64, 
-        frame_velocities_out: &mut SmallVec<[(Velocity, YawPitch); 4]>
-    ) -> (Position, YawPitch) {        
-        const NW_TICK : f64 = 1.0 / TICKS_PER_SECOND as f64;
+        &mut self,
+        vel: DVec3,
+        yaw_pitch: DVec2,
+        dt_secs: f64,
+        frame_velocities_out: &mut SmallVec<[(Velocity, YawPitch); 4]>,
+    ) -> (Position, YawPitch) {
+        const NW_TICK: f64 = 1.0 / TICKS_PER_SECOND as f64;
 
         self.time_accum += self.prev_dt;
         while self.time_accum >= NW_TICK {
@@ -54,23 +57,26 @@ impl Integrator {
 
             let total_v = Self::round_velocity(self.vel_accum - carry_v);
             let total_a = Self::round_angles(self.angle_accum - carry_a);
-            
+
             self.time_accum -= NW_TICK;
             self.vel_accum = carry_v;
             self.angle_accum = carry_a;
             self.vel_origin += total_v;
             self.angle_origin += total_a;
-            
-            frame_velocities_out.push((Velocity(total_v), YawPitch(total_a.x as f32, total_a.y as f32)));
+
+            frame_velocities_out.push((
+                Velocity(total_v),
+                YawPitch(total_a.x as f32, total_a.y as f32),
+            ));
         }
 
         let mut yaw_pitch = yaw_pitch; // mutable
-        const EPS : f64 = 0.001;
-        if self.angle_origin.y as f64 + self.angle_accum.y + yaw_pitch.y >= PI/2.0 - EPS {
-            yaw_pitch.y = PI/2.0 - EPS - self.angle_origin.y as f64 - self.angle_accum.y;
+        const EPS: f64 = 0.001;
+        if self.angle_origin.y as f64 + self.angle_accum.y + yaw_pitch.y >= PI / 2.0 - EPS {
+            yaw_pitch.y = PI / 2.0 - EPS - self.angle_origin.y as f64 - self.angle_accum.y;
         }
-        if self.angle_origin.y as f64 + self.angle_accum.y + yaw_pitch.y <= -PI/2.0 + EPS {
-            yaw_pitch.y = -PI/2.0 + EPS - self.angle_origin.y as f64 - self.angle_accum.y;
+        if self.angle_origin.y as f64 + self.angle_accum.y + yaw_pitch.y <= -PI / 2.0 + EPS {
+            yaw_pitch.y = -PI / 2.0 + EPS - self.angle_origin.y as f64 - self.angle_accum.y;
         }
 
         self.vel_accum += vel;
@@ -78,7 +84,7 @@ impl Integrator {
         self.prev_vel = vel;
         self.prev_angle = yaw_pitch;
         self.prev_dt = dt_secs;
-        
+
         let pos = self.vel_origin + Self::round_velocity(self.vel_accum);
         let angles = self.angle_origin + Self::round_angles(self.angle_accum);
         (Position(pos), YawPitch(angles.x, angles.y))
@@ -123,13 +129,13 @@ impl Integrator {
 }
 
 pub struct InputRecorder {
-    pub integrator: Integrator
+    pub integrator: Integrator,
 }
 
 impl InputRecorder {
     pub fn new(position: Vec3) -> Self {
         Self {
-            integrator: Integrator::new(position)
+            integrator: Integrator::new(position),
         }
     }
 }

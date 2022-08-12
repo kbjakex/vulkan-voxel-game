@@ -4,3 +4,4 @@
 /shared/target/
 /tools/compressor/target/
 /tools/texpack/target
+**/Cargo.lock

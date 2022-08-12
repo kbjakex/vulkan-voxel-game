@@ -1,4 +1,3 @@
-
 // At-a-glance view of all resources in the game.
 // Should preferably be imported from here for consistency and convenience,
 // although in practice there is no difference.
@@ -15,10 +14,10 @@ pub struct Resources {
     pub window_size: core::WindowSize,
 
     pub thread_pool: ThreadPool,
-    
+
     pub metrics: metrics::Resources,
     pub renderer: Renderer,
-    pub input: input::Resources
+    pub input: input::Resources,
 }
 
 pub mod core {
@@ -33,7 +32,7 @@ pub mod core {
     pub struct WindowSize {
         pub extent: erupt::vk::Extent2D,
         pub xy: glam::Vec2, // convenience
-        pub monitor_size_px: winit::dpi::LogicalSize<u32>
+        pub monitor_size_px: winit::dpi::LogicalSize<u32>,
     }
 }
 
@@ -52,14 +51,18 @@ pub mod metrics {
 }
 
 pub mod input {
+    use winit::event::ModifiersState;
+
     pub struct Resources {
         pub mouse: crate::input::Mouse,
         pub keyboard: crate::input::Keyboard,
         pub settings: crate::input::settings::InputSettings,
-        pub clipboard: arboard::Clipboard
+        pub clipboard: arboard::Clipboard,
+
+        // tracking for event-based input handling
+        pub keyboard_mods: ModifiersState,
     }
 }
-
 
 // Resources specific to the 'game' state, aka
 // when you're actually playing and not in a menu
@@ -67,12 +70,20 @@ pub mod game_state {
     use hecs::Entity;
     use shared::protocol::NetworkId;
 
-    use crate::{game::{states::game::input_recorder::InputRecorder, player::ThePlayer}, world::{dimension::{ECS, Chunks}, chunk_renderer::ChunkRenderer}};
+    use crate::{
+        player::ThePlayer,
+        states::game::camera::Camera,
+        states::game::input_recorder::InputRecorder,
+        world::{
+            chunk_renderer::ChunkRenderer,
+            dimension::{Chunks, ECS},
+        },
+    };
 
     pub struct Resources {
         pub username: flexstr::SharedStr,
         pub chat: crate::chat::Chat,
-        pub camera: crate::camera::Camera,
+        pub camera: Camera,
         pub net: Net,
         pub entities: ECS,
         pub chunks: Chunks,

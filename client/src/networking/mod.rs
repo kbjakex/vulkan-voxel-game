@@ -2,42 +2,40 @@ use std::{net::SocketAddr, thread::JoinHandle, time::Instant};
 
 use flexstr::SharedStr;
 use hecs::Entity;
-use shared::protocol::{NetworkId, s2c::login::LoginResponse};
-use tokio::sync::{mpsc::{
-    unbounded_channel, UnboundedReceiver, UnboundedSender,
-}, oneshot};
+use shared::protocol::{s2c::login::LoginResponse};
+use tokio::sync::{
+    mpsc::{unbounded_channel, UnboundedSender},
+    oneshot,
+};
 
 use self::network_thread::NetSideChannels;
 
 pub mod connection;
-mod login;
 mod network_thread;
 
-pub struct EntityState {
-    pub id: NetworkId,
-    
+pub enum S2C {
+    Chat(SharedStr),
+    EntityState(Box<[u8]>),
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
-pub enum ConnectionState {
-    Disconnected,
-    Connecting,
-    Connected,
+#[derive(Copy, Clone)]
+pub enum DisconnectReason {
+    Unknown
 }
 
 pub struct Channels {
-    pub chat_send: UnboundedSender<SharedStr>,
+    pub incoming: tokio::sync::mpsc::Receiver<S2C>,
 
-    pub entity_state_recv: UnboundedReceiver<Vec<u8>>,
-    pub player_state_send: UnboundedSender<Vec<u8>>,
+    pub chat: UnboundedSender<SharedStr>,
+    pub player_state: UnboundedSender<Box<[u8]>>,
 
-    pub on_lost_connection: oneshot::Receiver<()>,
-    pub disconnect: Option<oneshot::Sender<()>>,
+    pub on_disconnect: oneshot::Receiver<DisconnectReason>,
+    pub stop_network_thread: Option<oneshot::Sender<()>>,
 }
 
 struct NetThreadHandle {
     net_thread_handle: Option<JoinHandle<()>>,
-    channels: Channels
+    channels: Channels,
 }
 
 pub struct Connecting {
@@ -47,19 +45,19 @@ pub struct Connecting {
 
 impl Connecting {
     pub fn init_connection(address: SocketAddr, username: SharedStr) -> Self {
-        let (disconnect_send, disconnect_recv) = oneshot::channel();
+        let (stop_command_send, stop_command_recv) = oneshot::channel();
         let (on_connect_send, on_connect_recv) = oneshot::channel();
         let (on_lost_connection_send, on_lost_connection_recv) = oneshot::channel();
+        let (incoming_send, incoming_recv) = tokio::sync::mpsc::channel(64);
         let (chat_send, chat_recv) = unbounded_channel();
-        let (entity_state_send, entity_state_recv) = unbounded_channel();
         let (player_state_send, player_state_recv) = unbounded_channel();
 
         let channels = NetSideChannels {
-            chat: chat_recv,
-            entity_state: entity_state_send,
+            incoming: incoming_send,
+            chat_recv: chat_recv,
             player_state: player_state_recv,
-            disconnect: disconnect_recv,
-            on_lost_connection: on_lost_connection_send
+            on_lost_connection: on_lost_connection_send,
+            stop_command: stop_command_recv
         };
 
         Self {
@@ -68,14 +66,16 @@ impl Connecting {
                     network_thread::start(address, username, channels, on_connect_send)
                 })),
                 channels: Channels {
-                    disconnect: Some(disconnect_send),
-                    on_lost_connection: on_lost_connection_recv,
-                    chat_send,
-                    entity_state_recv,
-                    player_state_send,
-                }
+                    incoming: incoming_recv,
+                    
+                    chat: chat_send,
+                    player_state: player_state_send,
+                    
+                    on_disconnect: on_lost_connection_recv,
+                    stop_network_thread: Some(stop_command_send),
+                },
             }),
-            on_connect: on_connect_recv
+            on_connect: on_connect_recv,
         }
     }
 
@@ -89,8 +89,8 @@ impl Connecting {
                     network_id_to_entity: Vec::with_capacity(512),
                     // unwrap(): safe. on_connect is oneshot, this can never be reached twice.
                     handle: self.handle.take().unwrap(),
-                    closed: false
-                }
+                    closed: false,
+                },
             ))),
             Ok(Err(msg)) => Err(msg),
             Err(oneshot::error::TryRecvError::Empty) => Ok(None),
@@ -102,7 +102,7 @@ impl Connecting {
 pub struct Connection {
     pub network_id_to_entity: Vec<Entity>,
     handle: NetThreadHandle,
-    closed: bool
+    closed: bool,
 }
 
 impl Connection {
@@ -114,7 +114,15 @@ impl Connection {
         if self.closed {
             return; // guard mainly against Drop
         }
-        if self.handle.channels.disconnect.take().unwrap().send(()).is_err() {
+        if self
+            .handle
+            .channels
+            .stop_network_thread
+            .take()
+            .unwrap()
+            .send(())
+            .is_err()
+        {
             println!("to_net.send() failed :/");
             return;
         }
@@ -123,17 +131,24 @@ impl Connection {
 
         println!("Joining network thread. If game hangs, this is probably why");
         let start = Instant::now();
-        if self.handle.net_thread_handle.take().unwrap().join().is_err() {
+        if self
+            .handle
+            .net_thread_handle
+            .take()
+            .unwrap()
+            .join()
+            .is_err()
+        {
             println!("Failed to join network thread");
         }
         let end = Instant::now();
-        println!("join() took {}us", (end-start).as_micros());
+        println!("join() took {}us", (end - start).as_micros());
     }
 
     pub fn tick(&mut self) {
-        match self.handle.channels.on_lost_connection.try_recv() {
-            Ok(()) | Err(oneshot::error::TryRecvError::Closed) => self.closed = true,
-            Err(oneshot::error::TryRecvError::Empty) => {},
+        match self.handle.channels.on_disconnect.try_recv() {
+            Ok(_) | Err(oneshot::error::TryRecvError::Closed) => self.closed = true,
+            Err(oneshot::error::TryRecvError::Empty) => {}
         }
     }
 
@@ -178,7 +193,7 @@ fn try_reconnect(mut connection: ResMut<Connection>) {
 
         // The network thread sends a dummy message once connection is ready
         match handle.channels.on_connect.try_recv() {
-            Ok(response) => { 
+            Ok(response) => {
                 connection.state = ConnectionState::Connected;
             },
             Err(oneshot::error::TryRecvError::Closed) => connection.state = ConnectionState::Disconnected,

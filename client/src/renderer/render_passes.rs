@@ -132,7 +132,7 @@ impl RenderPasses {
 
         terrain_pass::handle_window_resize(&mut self.terrain, vk, fbs);
         /* sky_pass::handle_window_resize(&mut self.luma, vk, fbs); */
-        luminance_pass::handle_window_resize(&mut self.luma, vk, fbs);    
+        luminance_pass::handle_window_resize(&mut self.luma, vk, fbs);
         fxaa_pass::handle_window_resize(&mut self.fxaa, vk);
         ui_pass::handle_window_resize(&mut self.ui.game, vk);
         ui_pass::handle_window_resize(&mut self.ui.menu, vk);

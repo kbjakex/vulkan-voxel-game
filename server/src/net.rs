@@ -1,7 +1,7 @@
 use flexstr::{SharedStr, ToSharedStr};
-use glam::{Vec3, vec2, Vec2};
+use glam::{Vec3, Vec2};
 use hecs::{Entity, World};
-use shared::{protocol::{NetworkId, RawNetworkId, encode_angle_rad, encode_velocity, decode_angle_rad}, bits_and_bytes::{BitWriter, ByteReader, ByteWriter}};
+use shared::{protocol::{NetworkId, RawNetworkId, encode_angle_rad, encode_velocity, wrap_angle}, bits_and_bytes::ByteWriter};
 use tokio::sync::mpsc::UnboundedSender;
 
 use anyhow::Result;
@@ -84,11 +84,9 @@ pub fn tick(res: &mut Resources) {
     // TODO: heavily consider just keeping an array of PlayerConnections in Network. Or even better,
     // a vec per stream type in AoS style.
     let mut buf = [0u8; 2048];
-    for (_, (pos, facing, channels)) in res.main_world.query_mut::<(&Position, &Facing, &mut PlayerConnection)>() {
-        let mut stream = ByteWriter::new(&mut buf);
-        stream.write_u16(0);
+    for (_, (_, _, channels)) in res.main_world.query_mut::<(&Position, &Facing, &mut PlayerConnection)>() {
+        let mut stream = ByteWriter::new_for_message(&mut buf);
         for (id, delta_pos, delta_yaw_pitch) in net.moved_entity_data.iter().copied() {
-            use shared::protocol::wrap_angle;
             stream.write_u16(id.raw() as _);
             stream.write_u16(encode_velocity(delta_pos.x) as u16);
             stream.write_u16(encode_velocity(delta_pos.y) as u16);
@@ -99,9 +97,9 @@ pub fn tick(res: &mut Resources) {
 
         let len = stream.bytes_written();
         if len > 2 {
-            ByteWriter::new(&mut buf).write_u16(len as u16 - 2); // exclude len itself
+            stream.write_message_len();
 
-            if channels.entity_state.send((&buf[..len]).to_vec()).is_err() {
+            if channels.entity_state.send(stream.bytes().into()).is_err() {
                 eprintln!("Failed to send entity state");
             }
         }
@@ -249,7 +247,7 @@ impl NetworkIdManager {
 #[derive(Debug)]
 pub struct PlayerConnection {
     pub chat_send: UnboundedSender<SharedStr>,
-    pub entity_state: UnboundedSender<Vec<u8>>,
+    pub entity_state: UnboundedSender<Box<[u8]>>,
 }
 
 pub fn init() -> Result<Network> {

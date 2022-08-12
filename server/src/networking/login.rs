@@ -1,10 +1,10 @@
 use flexstr::{SharedStr, ToSharedStr};
 use glam::Vec3;
-use quinn::{ConnectionError, NewConnection, SendStream};
+use quinn::{ConnectionError, NewConnection};
 use shared::{protocol::{c2s, s2c, NetworkId}, bits_and_bytes::ByteWriter};
 use tokio::{
     sync::{
-        mpsc::{self, unbounded_channel, UnboundedSender},
+        mpsc::{self, unbounded_channel},
     },
     task,
 };
@@ -15,8 +15,7 @@ use super::{client_connection, PlayersChanged, network_thread::NetSideChannels};
 
 pub(super) async fn login(
     mut connection: NewConnection,
-    channels: NetSideChannels,
-    out_channel: UnboundedSender<(u32, SendStream)>,
+    channels: NetSideChannels
 ) {
     println!("Trying to accept uni stream...");
     let (mut s2c_hello, mut c2s_hello) = match connection.bi_streams.next().await.unwrap() {
@@ -175,7 +174,7 @@ async fn setup_client(
             }
         };
 
-        if stream.write(&[0u8]).await.is_err() {
+        if stream.write_all(&[0u8]).await.is_err() {
             println!("Random error #12471982");
             return;
         }
@@ -199,6 +198,7 @@ async fn setup_client(
         .unwrap();
 
     tokio::select!(
+        biased;
         _ = chat_fut_1 => {println!("chat::recv_driver returned")},
         _ = chat_fut_2 => {println!("chat::send_driver returned")},
         _ = player_state_fut => {println!("player_state::recv_driver returned")},

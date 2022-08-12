@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 use vkcore::{Device, RenderPass, Validation, VkContext};
 use winit::window::Window;
 
-use crate::camera::Camera;
+use crate::states::game::camera::Camera;
 
 use super::{
     descriptor_sets::DescriptorSets, framebuffers::FramebufferImages, pipelines::Pipelines,

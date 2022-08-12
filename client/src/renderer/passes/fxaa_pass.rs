@@ -1,14 +1,9 @@
 use erupt::vk;
 use vkcore::{pipeline::Pipeline, RenderPass, VkContext};
 
-use crate::{
-    assets,
-    renderer::{descriptor_sets::DescriptorSets},
-};
+use crate::{assets, renderer::descriptor_sets::DescriptorSets};
 
-pub fn create_render_pass(
-    vk: &VkContext
-) -> anyhow::Result<RenderPass> {
+pub fn create_render_pass(vk: &VkContext) -> anyhow::Result<RenderPass> {
     let extent = vk.swapchain.surface.extent;
 
     vk.create_render_pass(vkcore::RenderPassDescriptor {

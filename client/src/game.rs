@@ -1,6 +1,3 @@
-pub mod player;
-pub mod states;
-
 use std::time::Instant;
 
 use erupt::vk;
@@ -14,16 +11,14 @@ use winit::{
 };
 
 use crate::{
-    camera::Camera,
-    input::{self, KeyboardUpdater, MouseUpdater},
+    input::{self, Keyboard, Mouse},
     renderer::renderer,
     resources::{
         core::{Time, WindowSize},
         metrics, Resources,
     },
+    states::{game::camera::Camera, username_query::UsernameQueryState},
 };
-
-use self::states::username_query::UsernameQueryState;
 
 pub trait State {
     fn on_enter(&mut self, resources: &mut Resources) -> anyhow::Result<()>;
@@ -53,7 +48,7 @@ impl Game {
         }
 
         // Update mouse again at end of tick
-        MouseUpdater::last_tick(&mut self.resources.input.mouse);
+        Mouse::last_tick(&mut self.resources.input.mouse);
     }
 
     fn update_core_resources(&mut self) {
@@ -68,17 +63,20 @@ impl Game {
 
         let timings = &mut self.resources.metrics.frame_time;
         let frametime = (now - timings.last_updated).as_secs_f32() * 1000.0;
-        timings.frametime_history[self.resources.metrics.frame_count as usize & (timings.frametime_history.len()-1)] = frametime;
+        timings.frametime_history
+            [self.resources.metrics.frame_count as usize & (timings.frametime_history.len() - 1)] =
+            frametime;
 
-        let avg = timings.frametime_history.iter().sum::<f32>() / (timings.frametime_history.len() as f32);
+        let avg = timings.frametime_history.iter().sum::<f32>()
+            / (timings.frametime_history.len() as f32);
         timings.avg_fps = 1000.0 / avg;
         timings.avg_frametime_ms = avg;
         timings.last_updated = now;
 
         self.resources.metrics.frame_count += 1;
 
-        KeyboardUpdater::tick_keyboard(&mut self.resources.input.keyboard);
-        MouseUpdater::first_tick(&mut self.resources.input.mouse);
+        Keyboard::tick(&mut self.resources.input.keyboard);
+        Mouse::first_tick(&mut self.resources.input.mouse);
     }
 }
 
@@ -134,18 +132,6 @@ impl Game {
                 }
             }
             Event::DeviceEvent { .. } | Event::WindowEvent { .. } => {
-                let inputs = &mut self.resources.input;
-                match &event {
-                    Event::DeviceEvent { event, .. } => {
-                        KeyboardUpdater::handle_key_event(event, &mut inputs.keyboard);
-                    }
-                    Event::WindowEvent { event, .. } => {
-                        MouseUpdater::handle_mouse_events(event, &mut inputs.mouse);
-                        KeyboardUpdater::handle_window_event(event, &mut inputs.keyboard);
-                    }
-                    _ => {}
-                }
-
                 if let Some(result) = self.active_state.on_event(&event, &mut self.resources) {
                     self.handle_state_change(result, flow);
                 }
@@ -188,7 +174,8 @@ impl Game {
             .unwrap();
 
         let time = Instant::now();
-        let default_camera = Camera::new(Vec3::ZERO, Vec2::new(400.0, 480.0), f32::to_radians(80.0));
+        let default_camera =
+            Camera::new(Vec3::ZERO, Vec2::new(400.0, 480.0), f32::to_radians(80.0));
         let renderer = renderer::init(&window, &default_camera)?;
         //window.set_inner_size(LogicalSize::new(512, 512));
 
@@ -226,7 +213,7 @@ impl Game {
                 },
             },
             renderer,
-            input: input::init(window_size)?,
+            input: input::init((window_size.width, window_size.height))?,
         });
 
         let mut active_state = Box::new(UsernameQueryState::new()?);

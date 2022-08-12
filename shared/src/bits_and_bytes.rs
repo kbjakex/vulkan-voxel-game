@@ -22,8 +22,8 @@ pub struct ByteReader<'a> {
 
 #[allow(unused)]
 impl<'a> ByteReader<'a> {
-    pub fn new(src: &'a [u8]) -> ByteReader {
-        ByteReader {
+    pub fn new(src: &'a [u8]) -> Self {
+        Self {
             src,
             pos: 0
         }
@@ -184,10 +184,17 @@ pub struct ByteWriter<'a> {
 
 #[allow(unused)]
 impl<'a> ByteWriter<'a> {
-    pub fn new(dst: &'a mut [u8]) -> ByteWriter {
-        ByteWriter {
+    pub fn new(dst: &'a mut [u8]) -> Self {
+        Self {
             dst,
             pos: 0
+        }
+    }
+
+    pub fn new_for_message(dst: &'a mut [u8]) -> Self {
+        Self {
+            dst,
+            pos: 2,
         }
     }
 
@@ -204,6 +211,29 @@ impl<'a> ByteWriter<'a> {
 
         unsafe {self.dst.get_unchecked_mut(self.pos as usize..self.pos as usize + src.len()) }.copy_from_slice(src);
         self.pos += src.len() as u32;
+    }
+
+    pub fn write_message_len(&mut self) {
+        let len = (self.bytes_written() as u16).saturating_sub(2);
+        let off = ByteWriter::new(self.dst).write_varint15_r(len);
+        let (_, new) = std::mem::take(&mut self.dst).split_at_mut(off);
+        self.dst = new;
+        self.pos -= off as u32;
+    }
+
+    // write right-aligned 15-bit varint
+    pub fn write_varint15_r(&mut self, mut x: u16) -> usize {
+        debug_assert!(x < 32768, "value {x} too large, varint15 needs a control bit");
+
+        if x > 127 {
+            x = (x & 127) | ((x & !127) << 1) | 128;
+            self.write_u16(x);
+            0
+        } else {
+            self.write_u8(7); // skip one
+            self.write_u8(x as u8);
+            1
+        }
     }
 
     pub fn write_u8(&mut self, x: u8) {
@@ -331,6 +361,10 @@ impl<'a> ByteWriter<'a> {
 
     pub fn write_bool(&mut self, x: bool) {
         self.write_u8(x as u8);
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.dst[..self.pos as usize]
     }
 }
 

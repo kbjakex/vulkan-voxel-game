@@ -1,9 +1,9 @@
-pub mod render_passes;
 pub mod descriptor_sets;
+pub mod framebuffers;
 pub mod passes;
+pub mod pipelines;
+pub mod render_passes;
+pub mod renderer;
 pub mod text_renderer;
 pub mod ui_renderer;
-pub mod renderer;
-pub mod framebuffers;
 pub mod wrappers;
-pub mod pipelines;

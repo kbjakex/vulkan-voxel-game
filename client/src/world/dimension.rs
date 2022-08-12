@@ -1,9 +1,12 @@
-use glam::{IVec3, Vec3Swizzles, IVec2};
-use thunderdome::Arena;
+use glam::{IVec2, IVec3, Vec3Swizzles};
 
 use crate::resources::Resources;
 
-use super::{chunk::{Chunk, CHUNK_SIZE}, chunk_generator::ChunkGenerator, chunk_group::ChunkGroups};
+use super::{
+    chunk::{Chunk, CHUNK_SIZE},
+    chunk_generator::ChunkGenerator,
+    chunk_group::ChunkGroups,
+};
 
 pub type ECS = hecs::World;
 pub type ChunkIndex = u32;
@@ -33,7 +36,7 @@ impl Chunks {
             chunks,
             render_distance,
             generator: ChunkGenerator::new(world_seed),
-            groups: ChunkGroups::new()
+            groups: ChunkGroups::new(),
         }
     }
 
@@ -58,8 +61,6 @@ impl Chunks {
     pub fn on_player_exited_chunk(&mut self, new_chunk_pos: IVec3) {
         let new_corner_pos = new_chunk_pos.xz() - self.render_distance as i32;
         let change = new_corner_pos - self.corner_chunk_pos;
-
-
     }
 }
 

@@ -1,10 +1,6 @@
 use thunderdome::Arena;
 
-
-
-
-pub struct ChunkGroupData {
-}
+pub struct ChunkGroupData {}
 
 pub struct ChunkGroups {
     groups: Arena<ChunkGroupData>, // *The* arena responsible for index generation
@@ -13,7 +9,7 @@ pub struct ChunkGroups {
 impl ChunkGroups {
     pub fn new() -> Self {
         Self {
-            groups: Arena::new()
+            groups: Arena::new(),
         }
     }
 }

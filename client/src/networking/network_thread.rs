@@ -1,27 +1,33 @@
-use std::net::{SocketAddr, Ipv4Addr};
+use std::net::SocketAddr;
 
 use anyhow::bail;
 use flexstr::SharedStr;
-use quinn::{Endpoint, NewConnection, SendStream};
-use shared::{protocol::{c2s, s2c}, bits_and_bytes::ByteWriter};
+use quinn::{Endpoint, NewConnection};
+use shared::{
+    bits_and_bytes::ByteWriter,
+    protocol::{c2s, s2c},
+};
 use tokio::{
     sync::{
-        mpsc::{UnboundedReceiver, UnboundedSender},
+        mpsc::{UnboundedReceiver, Sender},
         oneshot,
     },
     task,
 };
 
-use crate::{chat::Chat, networking::connection};
+use crate::networking::connection;
 
 use anyhow::Result;
 
+use super::{DisconnectReason, S2C};
+
 pub struct NetSideChannels {
-    pub chat: UnboundedReceiver<SharedStr>,
-    pub entity_state: UnboundedSender<Vec<u8>>,
-    pub player_state: UnboundedReceiver<Vec<u8>>,
-    pub disconnect: oneshot::Receiver<()>,
-    pub on_lost_connection: oneshot::Sender<()>,
+    pub incoming: Sender<S2C>,
+    pub chat_recv: UnboundedReceiver<SharedStr>,
+    pub player_state: UnboundedReceiver<Box<[u8]>>,
+    pub on_lost_connection: oneshot::Sender<DisconnectReason>,
+
+    pub stop_command: oneshot::Receiver<()>,
 }
 
 pub fn start(
@@ -31,7 +37,7 @@ pub fn start(
     on_connect: oneshot::Sender<Result<s2c::login::LoginResponse, Box<str>>>,
 ) {
     if let Err(e) = start_inner(server_address, username, channels, on_connect) {
-        Chat::write(format!("Error in network thread: {}", e), 0xFF_22_22_FF);
+        println!("Error in network thread: {}", e);
     }
 }
 
@@ -46,20 +52,17 @@ async fn start_inner(
         Ok(tuple) => tuple,
         Err(e) => {
             println!("Connection failed: {e}");
-            on_connect.send(Err(format!("Connection failed: {e}").into_boxed_str()));
-            //Chat::write(format!("Connection failed! Reason: {}", e), 0xFF_22_22_FF);
+            let _ = on_connect.send(Err(format!("Connection failed: {e}").into_boxed_str()));
             return Ok(());
         }
     };
 
-    dbg![ new_conn.connection.max_datagram_size() ];
-
-    /* Chat::write("Connected!".to_owned(), 0x22_FF_22_FF); */
+    dbg![new_conn.connection.max_datagram_size()];
 
     let (mut chat_send, chat_recv) = new_conn.connection.open_bi().await?;
     chat_send.write(&[0]).await?; // open up the channel on the server side as well
-    let chat_fut_1 = task::spawn(connection::chat::recv_driver(chat_recv));
-    let chat_fut_2 = task::spawn(connection::chat::send_driver(chat_send, channels.chat));
+    let chat_fut_1 = task::spawn(connection::chat::recv_driver(chat_recv, channels.incoming.clone()));
+    let chat_fut_2 = task::spawn(connection::chat::send_driver(chat_send, channels.chat_recv));
 
     let mut player_state_send = new_conn.connection.open_uni().await?;
     player_state_send.write(&[0]).await?;
@@ -68,18 +71,14 @@ async fn start_inner(
         channels.player_state,
     ));
 
-    let entity_state_recv = new_conn.uni_streams.next().await.unwrap()?;
+    let mut entity_state_recv = new_conn.uni_streams.next().await.unwrap()?;
+    entity_state_recv.read_exact(&mut [0u8]).await?; // Read the byte used to open the channel
     let entity_fut = task::spawn(connection::entity_state::recv_driver(
         entity_state_recv,
-        channels.entity_state,
+        channels.incoming.clone(),
     ));
 
-    let disconnect = channels.disconnect;
-    let temp_fut = async {
-        println!("Temp fut starting");
-        disconnect.await.unwrap();
-        println!("Temp fut finished1");
-    };
+    let disconnect = channels.stop_command;
 
     if on_connect.send(Ok(response)).is_err() {
         println!("Main thread dropped on_connect channel");
@@ -91,7 +90,7 @@ async fn start_inner(
         _ = chat_fut_2 => {println!("chat::send_driver returned");}
         _ = entity_fut => {println!("entity_state::recv_driver returned");}
         _ = player_fut => {println!("player_state::send_driver returned");}
-        _ = temp_fut => {}
+        _ = disconnect => {}
     );
 
     println!("Stopping network thread");
@@ -102,34 +101,24 @@ async fn try_connect(
     server_address: SocketAddr,
     username: &SharedStr,
 ) -> Result<(Endpoint, NewConnection, s2c::login::LoginResponse)> {
-    let endpoint = setup::make_client_endpoint("0.0.0.0:0".parse()? /*, &[&server_cert]*/).unwrap();
+    let endpoint = setup::make_client_endpoint().unwrap();
 
-    Chat::write(
-        format!("Connecting to {}...", server_address),
-        0xFF_FF_FF_FF,
-    );
-    let conn = endpoint
-        .connect(server_address, "localhost")?
-        .await?;
+    println!("Connecting to {}...", server_address);
+    let conn = endpoint.connect(server_address, "localhost")?.await?;
 
     let mut buf = [0u8; 64];
     let mut writer = ByteWriter::new(&mut buf);
     let message = c2s::login::LoginMessage { username };
     message.write(&mut writer);
-    let length = writer.bytes_written() as usize;
 
     let (mut c2s_hello, mut s2c_hello) = conn.connection.open_bi().await?;
-    Chat::write("Sending username...".to_owned(), 0xFF_FF_FF_FF);
-    c2s_hello.write_all(&buf[0..length]).await?;
+    c2s_hello.write_all(writer.bytes()).await?;
     println!("Username sent");
 
-    let num_bytes = match s2c_hello.read(&mut buf).await {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => {
+    let num_bytes = match s2c_hello.read(&mut buf).await? {
+        Some(bytes) => bytes,
+        None => {
             bail!("Error receiving login response; stream was finished?");
-        }
-        Err(e) => {
-            bail!("Error receiving login response: {}", e);
         }
     };
 
@@ -143,41 +132,22 @@ async fn try_connect(
     Ok((endpoint, conn, response))
 }
 
-async fn process_outgoing(
-    mut to_server: SendStream,
-    mut from_main: UnboundedReceiver<Vec<u8>>,
-) -> Result<()> {
-    let mut outgoing_buffer: Vec<u8> = Vec::new();
-    outgoing_buffer.resize(2048, 0);
-
-    while let Some(msg) = from_main.recv().await {
-        to_server.write_all(&msg).await?;
-    }
-    Ok(())
-}
-
 mod setup {
-    use std::{error::Error, net::SocketAddr, sync::Arc};
+    use std::{error::Error, sync::Arc};
 
-    use quinn::{ClientConfig, Endpoint, TransportConfig};
+    use quinn::{ClientConfig, Endpoint};
 
-    pub(super) fn make_client_endpoint(
-        bind_addr: SocketAddr,
-        /*server_certs: &[&[u8]],*/
-    ) -> Result<Endpoint, Box<dyn Error>> {
-        let client_cfg = insecure(); //configure_client(/*server_certs*/)?;
-        let mut endpoint = Endpoint::client(bind_addr)?;
-        endpoint.set_default_client_config(client_cfg);
+    pub(super) fn make_client_endpoint() -> Result<Endpoint, Box<dyn Error>> {
+        let mut endpoint = Endpoint::client("[::]:0".parse()?)?;
+        let crypto = rustls::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
+            .with_no_client_auth();
+        endpoint.set_default_client_config(ClientConfig::new(std::sync::Arc::new(crypto)));
         Ok(endpoint)
     }
 
     struct SkipServerVerification;
-
-    impl SkipServerVerification {
-        fn new() -> Arc<Self> {
-            Arc::new(Self)
-        }
-    }
 
     impl rustls::client::ServerCertVerifier for SkipServerVerification {
         fn verify_server_cert(
@@ -193,33 +163,4 @@ mod setup {
         }
     }
 
-    fn insecure() -> ClientConfig {
-        let crypto = rustls::ClientConfig::builder()
-            .with_safe_defaults()
-            .with_custom_certificate_verifier(SkipServerVerification::new())
-            .with_no_client_auth();
-
-        let mut tconf = TransportConfig::default();
-        //tconf.max_idle_timeout(None);
-
-        let mut client_config = ClientConfig::new(std::sync::Arc::new(crypto));
-        /* client_config.transport_config(Arc::new(tconf)); */
-
-        client_config
-    }
-
-    #[allow(unused)]
-    fn configure_client(/*server_certs: &[&[u8]]*/) -> Result<ClientConfig, Box<dyn Error>> {
-        let mut certs = rustls::RootCertStore::empty();
-        /* for cert in server_certs {
-            certs.add(&rustls::Certificate(cert.to_vec()))?;
-        } */
-
-        let mut client_config = ClientConfig::with_root_certificates(certs);
-        let mut tconf = TransportConfig::default();
-        tconf.max_idle_timeout(None);
-        client_config.transport_config(Arc::new(tconf));
-
-        Ok(client_config)
-    }
 }

@@ -2,90 +2,55 @@ use quinn::{RecvStream, SendStream};
 use shared::bits_and_bytes::ByteReader;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 
-enum MessageStatus {
-    Consumed(usize),
-    NotEnoughData,
-    Malformed,
-    Error,
-}
+pub async fn receive_bytes<'a>(stream: &mut RecvStream, buf: &'a mut Vec<u8>) -> anyhow::Result<ByteReader<'a>> {
+    let mut header = [0u8; 2];
+    stream.read_exact(&mut header[0..2]).await?;
 
-async fn generic_recv_driver<F: FnMut(ByteReader) -> MessageStatus>(
-    mut incoming: RecvStream,
-    buffer_size: usize,
-    mut callback: F,
-) -> Result<()> {
-    let mut recv_buffer = Vec::new();
-    recv_buffer.resize(buffer_size, 0);
-
-    let mut offset = 0;
-
-    while let Some(bytes_received) = incoming.read(&mut recv_buffer[offset..]).await? {
-        let total_num_bytes = offset + bytes_received;
-
-        //println!("Received {bytes_received} bytes, total: {total_num_bytes}");
-
-        let mut start = 0;
-        while start < total_num_bytes {
-            match (callback)(ByteReader::new(&recv_buffer[start..total_num_bytes])) {
-                MessageStatus::Consumed(num_bytes) => {
-                    start += num_bytes;
-                }
-                MessageStatus::Malformed => bail!("Malformed packet"), // Not having any of that
-                MessageStatus::Error => return Ok(()), // something wrong in callback, exit here
-                MessageStatus::NotEnoughData => break
-            }
-        }
-        if start < total_num_bytes {
-            let remaining = total_num_bytes - start;
-            println!("Moving {} bytes", remaining);
-            recv_buffer
-                .as_mut_slice()
-                .copy_within(start..total_num_bytes, 0);
-            offset = remaining;
-        } else {
-            offset = 0;
-        }
+    let mut length = header[0] as usize;
+    if length > 127 {
+        length = length - 128 + ((header[1] as usize) << 7);
     }
-    Ok(())
+
+    if length == 0 {
+        anyhow::bail!("Received zero-length message! This is a client-side error.");
+    }
+    
+    buf.resize(length, 0);
+    let slice = if length > 127 {
+        &mut buf[..length]
+    } else {
+        buf[0] = header[1];
+        &mut buf[1..length]
+    };
+
+    stream.read_exact(slice).await?;
+    Ok(ByteReader::new(&mut buf[..]))
 }
 
 pub(super) mod chat {
-    use flexstr::{SharedStr, ToSharedStr};
+    use flexstr::SharedStr;
     use shared::{protocol::NetworkId, bits_and_bytes::ByteWriter};
 
     use super::*;
 
     pub async fn recv_driver(
-        incoming: RecvStream,
+        mut incoming: RecvStream,
         username: SharedStr,
         id: NetworkId,
         to_server: UnboundedSender<(NetworkId, SharedStr)>,
     ) -> Result<()> {
-        use MessageStatus::*;
-
         println!("chat::recv_driver ready");
-        generic_recv_driver(incoming, 512, move |mut stream| {
-            if stream.bytes_remaining() < 2 {
-                return NotEnoughData;
-            }
 
-            let length = stream.read_u16();
-            if stream.bytes_remaining() < length as _ {
-                return NotEnoughData;
-            }
-
-            let message = username.clone() + ": " + stream.read_str(length as _);
-            println!("'{}' (length {})", message, message.len());
-            if let Err(e) = to_server.send((id, message)) {
-                println!("Error broadcasting chat message: {}", e);
-                return Error;
-            }
-
-            Consumed(stream.bytes_read() as _)
-        })
-        .await
+        let mut buf = Vec::new();
+        loop {
+            let mut stream = receive_bytes(&mut incoming, &mut buf).await?;
+            
+            let message = username.clone() + ": " + stream.read_str(stream.bytes_remaining());
+            println!("Received '{}' (length {})", message, message.len());
+            let _ = to_server.send((id, message));
+        }
     }
 
     pub async fn send_driver(
@@ -95,22 +60,21 @@ pub(super) mod chat {
         println!("chat::send_driver ready");
         let mut buf = [0u8; 512];
         while let Some(message) = messages.recv().await {
-            let mut writer = ByteWriter::new(&mut buf);
-            writer.write_u16(message.len() as u16);
-            writer.write(message.as_bytes());
-            let length = writer.bytes_written() as usize;
+            debug_assert!(message.len() < buf.len(), "chat::send_driver: message too long! ({}/{} bytes)", message.len(), buf.len());
 
-            println!("Sending '{}' (length {})", message, message.len());
-            outgoing.write_all(&buf[..length]).await?;
-            println!("Sent.");
+            let mut writer = ByteWriter::new_for_message(&mut buf);
+            writer.write(message.as_bytes());
+            writer.write_message_len();
+
+            outgoing.write_all(&writer.bytes()).await?;
         }
         Ok(())
     }
 }
 
 pub(super) mod player_state {
-    use glam::{Vec3, vec3, vec2};
-    use shared::{bits_and_bytes::BitReader, protocol::{NetworkId, decode_angle_rad}};
+    use glam::{vec3, vec2};
+    use shared::{protocol::{NetworkId, decode_angle_rad, decode_velocity}};
 
     use crate::networking::network_thread::PlayerStateMsg;
 
@@ -118,52 +82,37 @@ pub(super) mod player_state {
 
     pub async fn recv_driver(
         id: NetworkId,
-        incoming: RecvStream,
+        mut incoming: RecvStream,
         to_server: UnboundedSender<(NetworkId, PlayerStateMsg)>,
     ) -> Result<()> {
         println!("player_state::recv_driver ready");
-        use MessageStatus::*;
-        generic_recv_driver(incoming, 512, move |mut stream| {
-            if stream.bytes_remaining() < 5 {
-                return NotEnoughData;
-            }
+        let mut buf = Vec::new();
+        loop {
+            let mut stream = receive_bytes(&mut incoming, &mut buf).await?;        
 
             let mut msg = PlayerStateMsg {
-                tick: 0,
+                tick: stream.read_u32(),
                 delta_pos: None,
                 delta_yaw_pitch: None,
             };
 
-            msg.tick = stream.read_u32();
-
-            let mask = stream.read_u8() as u32;
-
-            if (mask & 0x1) != 0 {
-                if stream.bytes_remaining() < 6 {
-                    return NotEnoughData;
-                }
-    
-                let dx = shared::protocol::decode_velocity(stream.read_u16() as u32);
-                let dy = shared::protocol::decode_velocity(stream.read_u16() as u32);
-                let dz = shared::protocol::decode_velocity(stream.read_u16() as u32);
+            let mask = stream.read_u8() as u32;            
+            
+            if (mask & 0x1) != 0 {    
+                let dx = decode_velocity(stream.read_u16() as u32);
+                let dy = decode_velocity(stream.read_u16() as u32);
+                let dz = decode_velocity(stream.read_u16() as u32);
                 msg.delta_pos = Some(vec3(dx, dy, dz));
             }
 
             if (mask & 0x2) != 0 {
-                if stream.bytes_remaining() < 4 {
-                    return NotEnoughData;
-                }
-
                 let delta_yaw = decode_angle_rad(stream.read_u16() as u16);
                 let delta_pitch = decode_angle_rad(stream.read_u16() as u16);
                 msg.delta_yaw_pitch = Some(vec2(delta_yaw, delta_pitch));
             }
 
             let _ = to_server.send((id, msg));
-
-            return Consumed(stream.bytes_read());
-        })
-        .await
+        }
     }
 }
 
@@ -172,7 +121,7 @@ pub(super) mod entity_state {
 
     pub async fn send_driver(
         mut outgoing: SendStream,
-        mut messages: UnboundedReceiver<Vec<u8>>,
+        mut messages: UnboundedReceiver<Box<[u8]>>,
     ) -> Result<()> {
         println!("entity_state::send_driver ready");
         while let Some(message) = messages.recv().await {
@@ -181,57 +130,3 @@ pub(super) mod entity_state {
         Ok(())
     }
 }
-
-/* pub async fn listen_to_client(
-    mut in_stream: RecvStream,
-    to_server: UnboundedSender<MetaMessage>,
-) -> Result<()> {
-    let mut recv_buffer = Vec::new();
-    recv_buffer.resize(2048, 0u8); // 2KB per connection = 500 per MiB...
-
-    let mut offset = 0usize;
-
-    /* while let Some(bytes_received) = in_stream.read(&mut recv_buffer[offset..]).await? {
-        let total_bytes = offset + bytes_received;
-
-        let mut reader = BinaryReader::new(&recv_buffer[..total_bytes]);
-        let mut num_bytes = 0;
-        let mut num_Messages = 0;
-        loop {
-            reader.mark_start();
-            let header = match c2s::read_header(&mut reader) {
-                Ok(header) => header,
-                Err(MessageError::NotEnoughData) => break,
-                Err(MessageError::Malformed) => {
-                    todo!("Kick player on malformed Messages")
-                }
-            };
-
-            if header.size_bytes < reader.bytes_remaining() {
-                break;
-            }
-
-            num_bytes += (reader.bytes_read() + header.size_bytes) as usize;
-            num_Messages += 1;
-            reader.skip(header.size_bytes);
-        }
-
-        if num_bytes == 0 {
-            continue;
-        }
-        println!("Received {} bytes / {} Messages!", num_bytes, num_Messages);
-        to_server.send(MetaMessage::Message(recv_buffer[..num_bytes].to_vec()))?;
-
-        if num_bytes == total_bytes {
-            offset = 0;
-        } else {
-            let remaining = total_bytes - num_bytes;
-            println!("Moving {} bytes", remaining);
-            recv_buffer
-                .as_mut_slice()
-                .copy_within(num_bytes..total_bytes, 0);
-            offset = remaining;
-        }
-    } */
-    Ok(())
-} */

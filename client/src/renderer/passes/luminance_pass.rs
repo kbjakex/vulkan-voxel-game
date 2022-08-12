@@ -1,7 +1,10 @@
 use erupt::vk;
-use vkcore::{RenderPass, pipeline::Pipeline, VkContext};
+use vkcore::{pipeline::Pipeline, RenderPass, VkContext};
 
-use crate::{assets, renderer::{descriptor_sets::DescriptorSets, framebuffers::FramebufferImages}};
+use crate::{
+    assets,
+    renderer::{descriptor_sets::DescriptorSets, framebuffers::FramebufferImages},
+};
 
 use anyhow::Result;
 
@@ -42,7 +45,7 @@ pub fn create_render_pass(vk: &VkContext, fbs: &FramebufferImages) -> Result<Ren
                 dst_stage_mask: vk::PipelineStageFlags::FRAGMENT_SHADER,
                 dst_access_mask: vk::AccessFlags::SHADER_READ,
                 dependency_flags: vk::DependencyFlags::BY_REGION,
-            }
+            },
         ],
         framebuffer_images: vkcore::FramebufferImages {
             width: fbs.luma.extent.width,
@@ -52,11 +55,14 @@ pub fn create_render_pass(vk: &VkContext, fbs: &FramebufferImages) -> Result<Ren
     })
 }
 
-pub fn create_pipelines(render_pass: &RenderPass, vk: &VkContext, descriptors: &DescriptorSets) -> Result<Pipeline> {
+pub fn create_pipelines(
+    render_pass: &RenderPass,
+    vk: &VkContext,
+    descriptors: &DescriptorSets,
+) -> Result<Pipeline> {
     let extent = vk.swapchain.surface.extent;
     use vk::ColorComponentFlags as CCF;
-    vk
-        .graphics_pipeline_builder()
+    vk.graphics_pipeline_builder()
         .render_pass(render_pass)
         .vertex_code(assets::postprocess_pipelines::FULLSCREEN_SHADER_VERT)
         .fragment_code(assets::postprocess_pipelines::LUMA_SHADER_FRAG)
@@ -79,22 +85,23 @@ pub fn create_pipelines(render_pass: &RenderPass, vk: &VkContext, descriptors: &
                 .blend_enable(false)
                 .color_write_mask(CCF::R | CCF::G | CCF::B | CCF::A),
         )
-        .layout(
-            vk::PipelineLayoutCreateInfoBuilder::new()
-                .set_layouts(&[descriptors.textures.layout, descriptors.attachments.luma_layout]),
-        )
+        .layout(vk::PipelineLayoutCreateInfoBuilder::new().set_layouts(&[
+            descriptors.textures.layout,
+            descriptors.attachments.luma_layout,
+        ]))
         .multisampling(
             vk::PipelineMultisampleStateCreateInfoBuilder::new()
                 .sample_shading_enable(false)
                 .rasterization_samples(vk::SampleCountFlagBits::_1),
         )
-        .viewport(vk::ViewportBuilder::new()
-            .x(0.0)
-            .y(0.0)
-            .width(extent.width as _)
-            .height(extent.height as _)
-            .min_depth(0.0)
-            .max_depth(1.0)
+        .viewport(
+            vk::ViewportBuilder::new()
+                .x(0.0)
+                .y(0.0)
+                .width(extent.width as _)
+                .height(extent.height as _)
+                .min_depth(0.0)
+                .max_depth(1.0),
         )
         .primitive_topology(vk::PrimitiveTopology::TRIANGLE_LIST)
         .primitive_restart_enable(false)

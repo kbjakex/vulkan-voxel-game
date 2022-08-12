@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use anyhow::Result;
 use flexstr::SharedStr;
 use glam::{Vec3, Vec2};
-use quinn::{Incoming, SendStream};
+use quinn::Incoming;
 use tokio::{
     sync::{
         mpsc::UnboundedSender,
@@ -34,7 +34,7 @@ pub async fn start(
     tx: oneshot::Sender<bool>,
     channels: NetSideChannels,
 ) {
-    let incoming = match setup::make_server_endpoint("0.0.0.0:29477".parse().unwrap()) {//"65.108.78.237:29477") {
+    let incoming = match setup::make_server_endpoint("0.0.0.0:29477".parse().unwrap()) {
         Ok(incoming) => incoming,
         Err(e) => {
             println!("Failed to create server endpoint! Error: {}", e);
@@ -44,16 +44,13 @@ pub async fn start(
     };
     tx.send(true).unwrap(); // unwrap(): crashing is probably not a terrible solution on failure
 
-    let (conn_sender, conn_receiver) = tokio::sync::mpsc::unbounded_channel();
-
-    poll_new_connections(incoming, channels, conn_sender).await;
+    poll_new_connections(incoming, channels).await;
     println!("Network thread terminating...");
 }
 
 async fn poll_new_connections(
     mut incoming: Incoming,
-    channels: NetSideChannels,
-    out_channel: UnboundedSender<(u32, SendStream)>,
+    channels: NetSideChannels
 ) {
     println!("Now polling for connections!");
     while let Some(connecting) = incoming.next().await {
@@ -70,8 +67,7 @@ async fn poll_new_connections(
 
         task::spawn(login::login(
             new_conn,
-            channels.clone(),
-            out_channel.clone(),
+            channels.clone()
         ));
     }
 }

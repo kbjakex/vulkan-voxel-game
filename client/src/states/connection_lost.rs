@@ -3,7 +3,7 @@ use erupt::vk;
 use winit::{
     dpi::LogicalSize,
     event::{ElementState, Event, MouseButton, WindowEvent},
-    window::CursorIcon,
+    window::{CursorIcon, CursorGrabMode},
 };
 
 use crate::{
@@ -25,16 +25,14 @@ pub struct ConnectionLostState {
 
 impl State for ConnectionLostState {
     fn on_enter(&mut self, res: &mut crate::resources::Resources) -> anyhow::Result<()> {
-        if !res.input.keyboard.is_in_text_input_mode() {
-            res.input.keyboard.enter_text_input_mode();
-        }
-
         res.renderer
             .set_present_mode(vk::PresentModeKHR::FIFO_KHR)?; // strong vsync
 
         let fullscreen_size = res.window_size.monitor_size_px;
         let window_size = LogicalSize::new(400, 480);
 
+        let _ = res.window_handle.set_cursor_grab(CursorGrabMode::None);
+        res.window_handle.set_cursor_visible(true);
         res.window_handle.set_maximized(false);
         res.window_handle.set_inner_size(LogicalSize::new(400, 480));
         res.window_handle
@@ -71,7 +69,6 @@ impl State for ConnectionLostState {
     }
 
     fn on_exit(&mut self, res: &mut crate::resources::Resources) -> anyhow::Result<()> {
-        res.input.keyboard.exit_text_input_mode();
         res.window_handle.set_cursor_icon(CursorIcon::Default);
         Ok(())
     }
@@ -164,15 +161,15 @@ impl ConnectionLostState {
         ui.draw_text("Connection lost", w / 2 - 195 / 2, h / 2 + 30);
 
         // Join button
-        ui.draw_text_colored("Ok", w / 2 - 33 / 2, h / 2 -45+15, TEXT);
-        ui.draw_rect_xy_wh((w / 2 - 86 / 2, h / 2-45), (86, 49), colors.0);
+        ui.draw_text_colored("Ok", w / 2 - 33 / 2, h / 2 - 45 + 15, TEXT);
+        ui.draw_rect_xy_wh((w / 2 - 86 / 2, h / 2 - 45), (86, 49), colors.0);
         ui.draw_rect_xy_wh(
-            (w / 2 - 86 / 2 + 2, h / 2 + 2-45),
+            (w / 2 - 86 / 2 + 2, h / 2 + 2 - 45),
             (86 - 4, 49 - 4),
             0x28263cFF,
         );
         ui.draw_rect_xy_wh(
-            (w / 2 - 86 / 2 + 4, h / 2 + 4-45),
+            (w / 2 - 86 / 2 + 4, h / 2 + 4 - 45),
             (86 - 8, 49 - 8),
             colors.1,
         );
@@ -182,11 +179,7 @@ impl ConnectionLostState {
         let (w, h) = win_size;
         let (x, y) = mouse_xy;
 
-        if x >= w / 2 - 86 / 2
-            && x <= w / 2 + 86 / 2
-            && y >= h / 2-45
-            && y <= h / 2-45 + 49
-        {
+        if x >= w / 2 - 86 / 2 && x <= w / 2 + 86 / 2 && y >= h / 2 - 45 && y <= h / 2 - 45 + 49 {
             return true; // Join button
         }
 

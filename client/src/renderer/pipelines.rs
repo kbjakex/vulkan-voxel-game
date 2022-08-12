@@ -1,7 +1,8 @@
-use vkcore::{VkContext, pipeline::Pipeline, Device};
+use vkcore::{pipeline::Pipeline, Device, VkContext};
 
-use super::{render_passes::RenderPasses, descriptor_sets::DescriptorSets, passes::ui_pass::UiPipelines};
-
+use super::{
+    descriptor_sets::DescriptorSets, passes::ui_pass::UiPipelines, render_passes::RenderPasses,
+};
 
 pub struct Pipelines {
     pub terrain: Pipeline,
@@ -12,9 +13,13 @@ pub struct Pipelines {
 }
 
 impl Pipelines {
-    pub fn init(vk: &VkContext, passes: &RenderPasses, descriptors: &DescriptorSets) -> anyhow::Result<Self> {
+    pub fn init(
+        vk: &VkContext,
+        passes: &RenderPasses,
+        descriptors: &DescriptorSets,
+    ) -> anyhow::Result<Self> {
         use super::passes::*;
-        Ok(Self{
+        Ok(Self {
             terrain: terrain_pass::create_pipelines(&passes.terrain, vk, descriptors)?,
             fxaa: fxaa_pass::create_pipelines(&passes.fxaa, vk, descriptors)?,
             luma: luminance_pass::create_pipelines(&passes.luma, vk, descriptors)?,
@@ -32,4 +37,3 @@ impl Pipelines {
         self.ui.text.destroy_self(device);
     }
 }
-

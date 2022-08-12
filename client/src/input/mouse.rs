@@ -1,5 +1,5 @@
 use glam::Vec2;
-use winit::event::{MouseButton, MouseScrollDelta, ElementState, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 
 pub struct Mouse {
     pressed: Vec<u32>,
@@ -95,37 +95,30 @@ impl Mouse {
     }
 }
 
-pub struct MouseUpdater;
-
-impl MouseUpdater {
-    pub fn new_mouse(window_size: winit::dpi::LogicalSize<u32>) -> Mouse {
-        let pos = Vec2::new(
-            window_size.width as f32 / 2.0,
-            window_size.height as f32 / 2.0,
-        );
-
+impl Mouse {
+    pub fn new(initial_pos: Vec2) -> Self {
         let mut pressed = Vec::new();
         pressed.resize(32, 0); // ain't nobody got more than 32 buttons in a mouse
 
         let mut just_released = Vec::new();
         just_released.resize(32, (0, 0));
 
-        Mouse {
+        Self {
             pressed,
             just_released,
             frame_counter: 0,
             moved: false,
-            pos,
-            prev_pos: pos,
+            pos: initial_pos,
+            prev_pos: initial_pos,
             delta: Vec2::ZERO,
             scroll_pos: 0.0,
             prev_scroll_pos: 0.0,
         }
     }
 
-    pub fn handle_mouse_events(event: &WindowEvent, mouse: &mut Mouse) -> bool {
+    pub fn handle_mouse_events(mouse: &mut Mouse, event: &WindowEvent) -> bool {
         match event {
-            WindowEvent::CursorMoved{position, ..} => {
+            WindowEvent::CursorMoved { position, .. } => {
                 mouse.pos.x = position.x as f32;
                 mouse.pos.y = position.y as f32;
             }

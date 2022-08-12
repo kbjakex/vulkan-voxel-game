@@ -1,5 +1,5 @@
 use erupt::vk;
-use vkcore::{Image, ImageAllocation, VkContext, UsageFlags, VkAllocator, Device};
+use vkcore::{Device, Image, ImageAllocation, UsageFlags, VkAllocator, VkContext};
 
 pub struct FramebufferImages {
     pub main_pass_color: Image,
@@ -39,7 +39,8 @@ impl FramebufferImages {
                 extent: vk.swapchain.surface.extent,
                 usage: UsageFlags::FAST_DEVICE_ACCESS,
                 flags: vk::ImageAspectFlags::DEPTH,
-                vk_usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                vk_usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                    | vk::ImageUsageFlags::SAMPLED,
             },
         )?;
         self.luma = vk.allocator.allocate_image(
@@ -58,7 +59,11 @@ impl FramebufferImages {
         Ok(())
     }
 
-    pub fn destroy_self(&mut self, device: &Device, allocator: &mut VkAllocator) -> anyhow::Result<()> {
+    pub fn destroy_self(
+        &mut self,
+        device: &Device,
+        allocator: &mut VkAllocator,
+    ) -> anyhow::Result<()> {
         allocator.deallocate_image(&mut self.main_pass_color, device)?;
         /* allocator.deallocate_image(&mut self.sky_pass_color, device)?; */
         allocator.deallocate_image(&mut self.depth, device)?;

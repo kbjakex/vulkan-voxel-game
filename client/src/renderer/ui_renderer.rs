@@ -4,13 +4,14 @@ use erupt::vk::{self, BufferUsageFlags};
 use glam::{IVec2, Vec2, Vec4};
 use vkcore::{Buffer, Device, UsageFlags, VkContext};
 
-use crate::camera::Camera;
+use crate::states::game::camera::Camera;
 
 use super::{
     descriptor_sets::DescriptorSets,
     passes::ui_pass::UiVertex,
     pipelines::Pipelines,
-    text_renderer::{Style, TextRenderer, TextColor, ColorRange}, renderer::RenderContext,
+    renderer::RenderContext,
+    text_renderer::{ColorRange, Style, TextColor, TextRenderer},
 };
 
 pub struct UiRenderer {
@@ -55,11 +56,22 @@ impl UiRenderer {
         self.text.draw_2d(text, x, y, style)
     }
 
-    pub fn draw_text_colored(&mut self, text: &str, x: u16, y: u16, color: TextColor) -> (u16, u16) {
-        self.text.draw_2d(text, x, y, Style {
-            colors: &[ColorRange::new(color, u32::MAX)],
-            ..Default::default()
-        })
+    pub fn draw_text_colored(
+        &mut self,
+        text: &str,
+        x: u16,
+        y: u16,
+        color: TextColor,
+    ) -> (u16, u16) {
+        self.text.draw_2d(
+            text,
+            x,
+            y,
+            Style {
+                colors: &[ColorRange::new(color, u32::MAX)],
+                ..Default::default()
+            },
+        )
     }
 
     pub fn draw(&mut self, vertices: &[UiVertex]) {
@@ -100,7 +112,11 @@ impl UiRenderer {
 }
 
 impl UiRenderer {
-    pub fn do_uploads(renderer: &mut UiRenderer, vk: &mut VkContext, frame: usize) -> anyhow::Result<()> {
+    pub fn do_uploads(
+        renderer: &mut UiRenderer,
+        vk: &mut VkContext,
+        frame: usize,
+    ) -> anyhow::Result<()> {
         if renderer.vertices.is_empty() {
             return Ok(());
         }
@@ -142,7 +158,7 @@ impl UiRenderer {
         ctx: &RenderContext,
         pipelines: &Pipelines,
         descriptors: &DescriptorSets,
-        wnd_size: Vec2
+        wnd_size: Vec2,
     ) {
         let commands = ctx.commands;
         unsafe {
