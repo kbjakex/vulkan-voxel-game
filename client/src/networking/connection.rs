@@ -1,6 +1,6 @@
 use quinn::{RecvStream, SendStream};
 
-use shared::bits_and_bytes::ByteReader;
+use shared::bits_and_bytes::{ByteWriter, ByteReader};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use tokio::sync::mpsc::Sender;
@@ -11,7 +11,7 @@ pub async fn receive_bytes<'a>(stream: &mut RecvStream, buf: &'a mut Vec<u8>) ->
     let mut header = [0u8; 2];
     stream.read_exact(&mut header[0..2]).await?;
 
-    let mut length = header[0] as usize;
+    let mut length = header[0] as usize;    
     if length > 127 {
         length = length - 128 + ((header[1] as usize) << 7);
     }
@@ -30,14 +30,9 @@ pub async fn receive_bytes<'a>(stream: &mut RecvStream, buf: &'a mut Vec<u8>) ->
 
 pub(super) mod chat {
     use flexstr::{SharedStr, ToSharedStr};
-    use shared::bits_and_bytes::ByteWriter;
-
     use super::*;
 
-    pub async fn recv_driver(
-        mut incoming: RecvStream,
-        to_main: Sender<S2C>,
-    ) -> anyhow::Result<()> {
+    pub async fn recv_driver(mut incoming: RecvStream, to_main: Sender<S2C>) -> anyhow::Result<()> {
         let mut buf = Vec::new();
         loop {
             let mut stream = receive_bytes(&mut incoming, &mut buf).await?;
@@ -47,10 +42,7 @@ pub(super) mod chat {
         }
     }
 
-    pub async fn send_driver(
-        mut outgoing: SendStream,
-        mut messages: UnboundedReceiver<SharedStr>,
-    ) -> anyhow::Result<()> {
+    pub async fn send_driver(mut outgoing: SendStream, mut messages: UnboundedReceiver<SharedStr>) -> anyhow::Result<()> {
         let mut buf = [0u8; 512];
         while let Some(message) = messages.recv().await {
             let mut writer = ByteWriter::new_for_message(&mut buf);
@@ -85,10 +77,12 @@ pub(super) mod entity_state {
         x NumEntries (Sorted ascending by entity id)
     */
 
+    use glam::{vec3, vec2};
     use shared::{
-        bits_and_bytes::ByteWriter,
-        protocol::{decode_angle_rad, decode_velocity},
+        protocol::{decode_angle_rad, decode_velocity, NetworkId},
     };
+
+    use crate::networking::EntityStateMsg;
 
     use super::*;
 
@@ -99,25 +93,46 @@ pub(super) mod entity_state {
         let mut recv_buf = Vec::new();
         let mut send_buf = Vec::new();
         loop {
+            send_buf.clear();
+
             let mut stream = receive_bytes(&mut incoming, &mut recv_buf).await?;
+            let tick = stream.read_varint15();
 
-            let entries = stream.bytes_remaining() / 12;
-            
-            send_buf.resize(entries * 58, 0);
-            let mut writer = ByteWriter::new(&mut send_buf);
-
-            for _ in 0..entries {
-                writer.write_u16(stream.read_u16());
-                writer.write_f32(decode_velocity(stream.read_u16() as u32));
-                writer.write_f32(decode_velocity(stream.read_u16() as u32));
-                writer.write_f32(decode_velocity(stream.read_u16() as u32));
-                writer.write_f32(decode_angle_rad(stream.read_u16()));
-                writer.write_f32(decode_angle_rad(stream.read_u16()));
+            while stream.bytes_remaining() > 0 {
+                let start = stream.read_varint15();
+                match start & 0b11 {
+                    0b00 => {
+                        println!("> EntityAdded @ {}", start >> 2);
+                        send_buf.push(EntityStateMsg::EntityAdded{
+                            id: NetworkId::from_raw(start >> 2),
+                            position: vec3(stream.read_f32(), stream.read_f32(), stream.read_f32()),
+                            head_rotation: vec2(stream.read_f32(), stream.read_f32()),
+                        });
+                    }
+                    0b10 => {
+                        println!("> EntityRemoved @ {}", start >> 2);
+                        send_buf.push(EntityStateMsg::EntityRemoved {
+                            id: NetworkId::from_raw(start >> 2),
+                        });
+                    }
+                    _ => {
+                        send_buf.push(EntityStateMsg::EntityMoved { 
+                            id: NetworkId::from_raw(start >> 1), 
+                            delta_pos: vec3(
+                                decode_velocity(stream.read_u16() as u32),
+                                decode_velocity(stream.read_u16() as u32),
+                                decode_velocity(stream.read_u16() as u32),
+                            ), 
+                            delta_head_rotation: vec2(
+                                decode_angle_rad(stream.read_u16()),
+                                decode_angle_rad(stream.read_u16()),
+                            )
+                        });
+                    }
+                }
             }
 
-            if writer.bytes_written() > 0 {
-                let _ = to_main.send(S2C::EntityState(writer.bytes().into())).await;
-            }
+            let _ = to_main.send(S2C::EntityState(tick, send_buf.as_slice().into())).await;
         }
     }
 }

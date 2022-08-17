@@ -9,7 +9,7 @@ use glam::{vec2, EulerRot, Mat4, Vec2, Vec3};
 use hecs::Entity;
 use shared::{
     bits_and_bytes::{ByteReader, ByteWriter},
-    protocol::{encode_angle_rad, encode_velocity, s2c::login::LoginResponse, NetworkId},
+    protocol::{encode_angle_rad, encode_velocity, NetworkId},
 };
 use smallvec::SmallVec;
 use vkcore::{Buffer, BufferAllocation, UsageFlags, VkContext};
@@ -22,12 +22,12 @@ use winit::{
 use crate::{
     chat::Chat,
     components::{
-        HeadRotation, OldHeadRotation, OldPosition, PendingHeadRotation, PendingPosition, Position,
+        HeadRotation, OldHeadRotation, OldPosition, Position,
         Velocity,
     },
     game::{State, StateChange},
     input::{self, Key},
-    networking::{Connection, S2C},
+    networking::{Connection, S2C, LoginResponse, EntityStateMsg},
     player::ThePlayer,
     renderer::{
         passes::terrain_pass::Vertex,
@@ -41,9 +41,8 @@ use crate::{
         game_state::{self, Net}, Resources,
     },
     world::{
-        chunk::WorldBlockPosExt,
         chunk_renderer::ChunkRenderer,
-        dimension::{Chunks, ECS},
+        dimension::{Chunks, ECS}, chunk::WorldBlockPosExt,
     },
 };
 
@@ -203,22 +202,9 @@ impl GameState {
             net.next_network_tick =
                 (net.network_tick_count as f64 * shared::TICK_DURATION.as_secs_f64()) as f32;
 
-            let ecs = &mut self.res.entities;
-            for (_, (old_pos, new_pos, pending)) in
-                ecs.query_mut::<(&mut OldPosition, &mut Position, &PendingPosition)>()
-            {
-                old_pos.0 = new_pos.0;
-                new_pos.0 = pending.0;
+            for (_, (&Position(new), OldPosition(old))) in self.res.entities.query_mut::<(&Position, &mut OldPosition)>() {
+                *old = new;
             }
-
-            for (_, (old_rot, new_rot, pending)) in 
-                ecs.query_mut::<(&mut OldHeadRotation, &mut HeadRotation, &PendingHeadRotation)>() 
-            {
-                old_rot.0 = new_rot.0;
-                new_rot.0 = pending.0;
-            }
-
-            //println!("Put to use at {}", res.time.secs_f32);
         }
 
         let net = &mut self.res.net;
@@ -237,59 +223,55 @@ impl GameState {
                             res.time.secs_f32,
                         );
                     },
-                    S2C::EntityState(bytes) => {
-                        Self::process_entity_state_msg(&mut self.res.entities, net, bytes);
+                    S2C::EntityState(tick, changes) => {
+                        Self::process_entity_state_msg(&mut self.res.entities, net, tick, changes);
                     },
                 }
             }
         }
     }
 
-    fn process_entity_state_msg(ecs: &mut ECS, net: &mut Net, mut bytes: Box<[u8]>) {
-        //println!("Received at {}", res.time.secs_f32);
-        let mut reader = ByteReader::new(&mut bytes);
-        while reader.bytes_remaining() > 0 {
-            let id = NetworkId::from_raw(reader.read_u16());
-            let velocity =
-                Vec3::new(reader.read_f32(), reader.read_f32(), reader.read_f32());
-            let rotation = Vec2::new(reader.read_f32(), reader.read_f32());
-
-            if id == net.nid {
-                // bleh
-            } else {
-                if net.nid_to_entity_mapping.len() <= id.raw() as usize {
-                    net.nid_to_entity_mapping.resize(
-                        id.raw() as usize + 1,
-                        (NetworkId::from_raw(0), Entity::DANGLING),
-                    );
-                }
-
-                let (check_id, mut entity) = net.nid_to_entity_mapping[id.raw() as usize];
-                if check_id != id || entity == Entity::DANGLING {
-                    if entity != Entity::DANGLING {
-                        let _ = ecs.despawn(entity); // bad
-                    }
-                    println!("Spawning entity with id {id}");
-
-                    // New entity then. TODO: add a proper way to spawn entities and make this an error
-                    entity = ecs.spawn((
+    fn process_entity_state_msg(ecs: &mut ECS, net: &mut Net, tick: u16, updates: Box<[EntityStateMsg]>) {
+        for msg in updates.iter().copied() {
+            match msg {
+                EntityStateMsg::EntityAdded { id, position, head_rotation } => {
+                    let entity = ecs.spawn((
                         id,
-                        Position(Vec3::ZERO),
-                        OldPosition(Vec3::ZERO),
-                        PendingPosition(Vec3::ZERO),
-                        HeadRotation(Vec2::ZERO),
-                        OldHeadRotation(Vec2::ZERO),
-                        PendingHeadRotation(Vec2::ZERO),
+                        Position(position),
+                        OldPosition(position),
+                        HeadRotation(head_rotation),
+                        OldHeadRotation(head_rotation),
                     ));
+
+                    if net.nid_to_entity_mapping.len() <= id.raw() as usize {
+                        net.nid_to_entity_mapping.resize(id.raw() as usize + 1, (NetworkId::INVALID, Entity::DANGLING));
+                    }
+
+                    if net.nid_to_entity_mapping[id.raw() as usize].0 != NetworkId::INVALID {
+                        eprintln!("  ERROR  EntityAdded error: id {id} is already mapped to an entity!");
+                        ecs.despawn(net.nid_to_entity_mapping[id.raw() as usize].1).unwrap();
+                    }
+
                     net.nid_to_entity_mapping[id.raw() as usize] = (id, entity);
-
-                    println!("Spawned entity with id {id:?}");
-                }
-
-                ecs.get::<&mut PendingPosition>(entity).unwrap().0 =
-                    ecs.get::<&Position>(entity).unwrap().0 + velocity;
-                ecs.get::<&mut PendingHeadRotation>(entity).unwrap().0 =
-                    ecs.get::<&HeadRotation>(entity).unwrap().0 + rotation;
+                },
+                EntityStateMsg::EntityRemoved { id } => {
+                    let mapping = net.nid_to_entity_mapping.get(id.raw() as usize).copied();
+                    if let Some((check_id, entity)) = mapping && check_id == id {
+                        ecs.despawn(entity).unwrap();
+                        net.nid_to_entity_mapping[id.raw() as usize] = (NetworkId::INVALID, Entity::DANGLING);
+                    } else {
+                        eprintln!("  ERROR  Tried to remove entity with id {id} but it does not exist");
+                    }
+                },
+                EntityStateMsg::EntityMoved { id, delta_pos, delta_head_rotation } => {
+                    let mapping = net.nid_to_entity_mapping.get(id.raw() as usize).copied();
+                    if let Some((check_id, entity)) = mapping && check_id == id {
+                        ecs.get::<&mut Position>(entity).unwrap().0 += delta_pos;
+                        ecs.get::<&mut HeadRotation>(entity).unwrap().0 += delta_head_rotation;
+                    } else {
+                        eprintln!("  ERROR  Tried to move entity with id {id} but it does not exist");
+                    }
+                },
             }
         }
     }
@@ -348,7 +330,7 @@ impl GameState {
         camera.set_rotation(new_pos.1 .0, new_pos.1 .1);
 
         if !nw_frames.is_empty() && let Some(channels) = self.res.net.connection.channels() {
-            for (Velocity(velocity), YawPitch(yaw, pitch)) in nw_frames {
+            for (Velocity(velocity), YawPitch(yaw, pitch), origin) in nw_frames {
                 //println!("Moved {} units in NW tick", velocity.length());
                 let mut payload = [0u8; 17];
 
@@ -402,9 +384,9 @@ impl GameState {
         }
 
         hud!("FPS: {:.4}", res.metrics.frame_time.avg_fps);
-        hud!("X: {:.4}", self.res.camera.pos().x);
-        hud!("Y: {:.4}", self.res.camera.pos().y);
-        hud!("Z: {:.4}", self.res.camera.pos().z);
+        hud!("X: {:.8}", self.res.camera.pos().x);
+        hud!("Y: {:.8}", self.res.camera.pos().y);
+        hud!("Z: {:.8}", self.res.camera.pos().z);
         hud!("Yaw: {:.3}", self.res.camera.yaw().to_degrees());
         hud!("Pitch: {:.3}", self.res.camera.pitch().to_degrees());
     }
@@ -485,7 +467,7 @@ impl GameState {
                     .for_each(|(_, (old_pos, new_pos, rot))| {
                         let pv = self.res.camera.proj_view_matrix()
                             * Mat4::from_translation((new_pos.0 - old_pos.0) * t + old_pos.0)
-                            * Mat4::from_euler(EulerRot::YXZ, rot.0.x + PI / 2.0, -rot.0.y, 0.0);
+                            * Mat4::from_euler(EulerRot::YXZ, -rot.0.x + PI / 2.0, -rot.0.y, 0.0);
                         let pvm_ptr = &pv as *const Mat4 as *const c_void;
                         vk.device.cmd_push_constants(
                             ctx.commands,
@@ -586,7 +568,7 @@ impl GameState {
                 username,
                 chat: Chat::new(res.window_size.extent.width as _),
                 net: game_state::Net {
-                    nid: login.network_id,
+                    nid: login.nid,
                     connection,
                     network_tick_count: 0,
                     next_network_tick: shared::TICK_DURATION.as_secs_f32(),

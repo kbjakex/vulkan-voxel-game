@@ -71,6 +71,15 @@ impl<'a> ByteReader<'a> {
         self.pos += dst.len();
     }
 
+    pub fn read_varint15(&mut self) -> u16 {
+        let b1 = self.read_u8();
+        if (b1 & 128) != 0 {
+            (b1 as u16 & 127) | ((self.read_u8() as u16) << 7)
+        } else {
+            b1 as u16
+        }
+    }    
+
     pub fn read_u8(&mut self) -> u8 {
         let p = self.pos;
         self.pos += 1;
@@ -233,6 +242,16 @@ impl<'a> ByteWriter<'a> {
             self.write_u8(7); // skip one
             self.write_u8(x as u8);
             1
+        }
+    }
+
+    pub fn write_varint15_l(&mut self, mut x: u16) {
+        debug_assert!(x < 32768, "value {x} too large, varint15 needs a control bit");
+
+        if x < 128 {
+            self.write_u8(x as u8 & 127);
+        } else {
+            self.write_u16((x & 127) | ((x & !127) << 1) | 128);
         }
     }
 

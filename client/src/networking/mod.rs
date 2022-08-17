@@ -1,8 +1,9 @@
 use std::{net::SocketAddr, thread::JoinHandle, time::Instant};
 
 use flexstr::SharedStr;
+use glam::{Vec3, Vec2};
 use hecs::Entity;
-use shared::protocol::{s2c::login::LoginResponse};
+use shared::protocol::NetworkId;
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedSender},
     oneshot,
@@ -13,9 +14,34 @@ use self::network_thread::NetSideChannels;
 pub mod connection;
 mod network_thread;
 
+pub struct LoginResponse {
+    pub nid: NetworkId,
+    pub position: Vec3,
+    pub head_rotation: Vec2,
+    pub world_seed: u64,
+}
+
+
+#[derive(Clone, Copy)]
+pub enum EntityStateMsg {
+    EntityAdded {
+        id: NetworkId,
+        position: Vec3,
+        head_rotation: Vec2
+    },
+    EntityRemoved {
+        id: NetworkId,
+    },
+    EntityMoved {
+        id: NetworkId,
+        delta_pos: Vec3,
+        delta_head_rotation: Vec2,
+    }
+}
+
 pub enum S2C {
     Chat(SharedStr),
-    EntityState(Box<[u8]>),
+    EntityState(u16, Box<[EntityStateMsg]>),
 }
 
 #[derive(Copy, Clone)]

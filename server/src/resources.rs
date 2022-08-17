@@ -10,7 +10,8 @@ use crate::net::Network;
 pub struct Resources {
     pub net: Network,
     pub main_world: World,
-    pub time: Time
+    pub time: Time,
+    pub current_tick: u32,
 }
 
 pub struct Time {

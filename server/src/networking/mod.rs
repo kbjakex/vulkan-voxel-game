@@ -2,60 +2,58 @@ use std::thread::JoinHandle;
 
 use anyhow::bail;
 use flexstr::SharedStr;
-use tokio::sync::{mpsc::{UnboundedReceiver, unbounded_channel, error::TryRecvError, self}, oneshot};
+use tokio::sync::{mpsc::{UnboundedReceiver, unbounded_channel}, oneshot};
 
 use anyhow::Result;
 
-use crate::{components::net::PlayerConnection};
+use crate::{components::NetworkId, net::PlayerChannels};
 
 use self::network_thread::{NetSideChannels, PlayerStateMsg};
 
 pub mod network_thread;
 pub mod client_connection;
 pub mod login;
-pub mod channels;
+
+#[derive(Debug)]
+pub enum LoginResponse {
+    Success(Box<[u8]>),
+    Denied(&'static [u8])
+}
 
 #[derive(Debug)]
 pub enum PlayersChanged {
-    NetworkIdRequest {
-        channel: mpsc::Sender<shared::protocol::NetworkId>,
+    LoginRequest {
+        channel: oneshot::Sender<(NetworkId, LoginResponse)>,
+        username: SharedStr,
     },
     Connected {
         username: SharedStr,
-        network_id: shared::protocol::NetworkId,
-        channels: PlayerConnection,
+        network_id: NetworkId,
+        channels: PlayerChannels,
     },
     Disconnect {
-        network_id: shared::protocol::NetworkId
+        network_id: NetworkId
     }
 }
 
 pub struct Channels {
     pub player_join: UnboundedReceiver<PlayersChanged>,
-    pub chat_recv: UnboundedReceiver<(shared::protocol::NetworkId, SharedStr)>,
-    pub player_state_recv: UnboundedReceiver<(shared::protocol::NetworkId, PlayerStateMsg)>
+    pub chat_recv: UnboundedReceiver<(NetworkId, SharedStr)>,
+    pub player_state_recv: UnboundedReceiver<(NetworkId, PlayerStateMsg)>
 }
 
 pub struct NetHandle {
     thread_handle: JoinHandle<()>,
-    closed: bool,
     pub channels: Channels,
 }
 
 impl NetHandle {
     pub fn closed(&self) -> bool {
-        self.closed
+        self.thread_handle.is_finished()
     }
 
     pub fn poll_joins(&mut self) -> Option<PlayersChanged> {
-        match self.channels.player_join.try_recv() {
-            Ok(val) => Some(val),
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                self.closed = true;
-                None
-            }
-        }
+        self.channels.player_join.try_recv().ok()
     }
 }
 
@@ -85,7 +83,6 @@ pub fn init() -> Result<NetHandle> {
 
     Ok(NetHandle {
         thread_handle,
-        closed: false,
         channels: Channels {
             player_join: player_join_recv,
             chat_recv,

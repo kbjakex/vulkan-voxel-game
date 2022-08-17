@@ -1,11 +1,10 @@
 use std::net::SocketAddr;
 
-use anyhow::bail;
 use flexstr::SharedStr;
-use quinn::{Endpoint, NewConnection};
+use glam::{Vec2, Vec3};
+use quinn::{Endpoint, NewConnection, VarInt};
 use shared::{
-    bits_and_bytes::ByteWriter,
-    protocol::{c2s, s2c},
+    bits_and_bytes::ByteWriter, protocol::NetworkId
 };
 use tokio::{
     sync::{
@@ -15,11 +14,11 @@ use tokio::{
     task,
 };
 
-use crate::networking::connection;
+use crate::networking::connection::{self, receive_bytes};
 
 use anyhow::Result;
 
-use super::{DisconnectReason, S2C};
+use super::{DisconnectReason, S2C, LoginResponse};
 
 pub struct NetSideChannels {
     pub incoming: Sender<S2C>,
@@ -34,7 +33,7 @@ pub fn start(
     server_address: SocketAddr,
     username: SharedStr,
     channels: NetSideChannels,
-    on_connect: oneshot::Sender<Result<s2c::login::LoginResponse, Box<str>>>,
+    on_connect: oneshot::Sender<Result<LoginResponse, Box<str>>>,
 ) {
     if let Err(e) = start_inner(server_address, username, channels, on_connect) {
         println!("Error in network thread: {}", e);
@@ -46,9 +45,9 @@ async fn start_inner(
     server_address: SocketAddr,
     username: SharedStr,
     channels: NetSideChannels,
-    on_connect: oneshot::Sender<Result<s2c::login::LoginResponse, Box<str>>>,
+    on_connect: oneshot::Sender<Result<LoginResponse, Box<str>>>,
 ) -> Result<()> {
-    let (_endpoint, mut new_conn, response) = match try_connect(server_address, &username).await {
+    let (endpoint, mut new_conn, response) = match try_connect(server_address, &username).await {
         Ok(tuple) => tuple,
         Err(e) => {
             println!("Connection failed: {e}");
@@ -94,40 +93,51 @@ async fn start_inner(
     );
 
     println!("Stopping network thread");
+    endpoint.close(VarInt::from_u32(1), &[]);
+    endpoint.wait_idle().await;
+    println!("Network thread stopped");
     Ok(())
 }
 
 async fn try_connect(
     server_address: SocketAddr,
     username: &SharedStr,
-) -> Result<(Endpoint, NewConnection, s2c::login::LoginResponse)> {
+) -> Result<(Endpoint, NewConnection, LoginResponse)> {
     let endpoint = setup::make_client_endpoint().unwrap();
 
     println!("Connecting to {}...", server_address);
     let conn = endpoint.connect(server_address, "localhost")?.await?;
 
-    let mut buf = [0u8; 64];
-    let mut writer = ByteWriter::new(&mut buf);
-    let message = c2s::login::LoginMessage { username };
-    message.write(&mut writer);
+    let mut buf = [0u8; 256];
+    let mut writer = ByteWriter::new_for_message(&mut buf);
+    writer.write_u16(shared::protocol::PROTOCOL_MAGIC);
+    writer.write_u16(shared::protocol::PROTOCOL_VERSION);
+    writer.write_u8(username.len() as u8);
+    writer.write(username.as_str().as_bytes());
+    writer.write_message_len();
 
-    let (mut c2s_hello, mut s2c_hello) = conn.connection.open_bi().await?;
-    c2s_hello.write_all(writer.bytes()).await?;
-    println!("Username sent");
+    let (mut hello_send, mut hello_recv) = conn.connection.open_bi().await?;
+    hello_send.write_all(writer.bytes()).await?;
 
-    let num_bytes = match s2c_hello.read(&mut buf).await? {
-        Some(bytes) => bytes,
-        None => {
-            bail!("Error receiving login response; stream was finished?");
-        }
+    let mut recv_buf = Vec::new();
+    let mut reader = receive_bytes(&mut hello_recv, &mut recv_buf).await?;
+    if reader.bytes_remaining() < 30 {
+        anyhow::bail!("Invalid login response from server, got only {} bytes", reader.bytes_remaining());
+    }
+
+    let response = LoginResponse {
+        nid: NetworkId::from_raw(reader.read_u16()),
+        position: Vec3 {
+            x: reader.read_f32(),
+            y: reader.read_f32(),
+            z: reader.read_f32(),
+        },
+        head_rotation: Vec2 {
+            x: reader.read_f32(), // Yaw
+            y: reader.read_f32(), // Pitch
+        },
+        world_seed: reader.read_u64(), // World seed
     };
-
-    let response = match s2c::login::LoginResponse::parse(&buf[..num_bytes]) {
-        Ok(message) => message,
-        Err(message_error) => bail!("Invalid login response: {:?}", message_error),
-    };
-
-    //chat!("(Server sent position {:?} and network id {})", response.position, response.network_id);
 
     Ok((endpoint, conn, response))
 }

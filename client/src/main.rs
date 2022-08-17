@@ -1,3 +1,5 @@
+#![feature(let_else)]
+
 pub mod assets;
 pub mod chat;
 pub mod components;

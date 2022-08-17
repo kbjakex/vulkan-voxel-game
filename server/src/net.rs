@@ -1,122 +1,179 @@
-use flexstr::{SharedStr, ToSharedStr};
-use glam::{Vec3, Vec2};
-use hecs::{Entity, World};
-use shared::{protocol::{NetworkId, RawNetworkId, encode_angle_rad, encode_velocity, wrap_angle}, bits_and_bytes::ByteWriter};
+use std::collections::BinaryHeap;
+
+use bevy_utils::HashSet;
+use flexstr::SharedStr;
+use glam::Vec3;
+use hecs::Entity;
+use shared::{protocol::{NetworkId, RawNetworkId}, bits_and_bytes::ByteWriter};
 use tokio::sync::mpsc::UnboundedSender;
 
 use anyhow::Result;
 
 use crate::{
-    components::{Facing, OldPosition, Position, HeadYawPitch},
-    networking::{NetHandle, PlayersChanged},
+    components::{OldPosition, Position, HeadYawPitch, self, PlayerBundle, YawPitch, Username, PlayerId},
+    networking::{NetHandle, PlayersChanged, LoginResponse, client_connection::entity_state::EntityStateMsg},
     resources::Resources,
-    Username,
 };
+
+struct Channels {
+    chat: Vec<Option<UnboundedSender<SharedStr>>>,
+}
+
+struct EntityTracker {
+    player_entity: Entity,
+    entities: HashSet<Entity>,
+    entity_state_channel: UnboundedSender<(u32, Box<[(NetworkId, EntityStateMsg)]>)>,
+}
 
 // A main-thread controller for anything related to networking.
 pub struct Network {
     // A handle to the network thread
     handle: NetHandle,
-    pub id_manager: NetworkIdManager,
+    entity_mapping: NidEntityMapping,
+    network_id_allocator: IdAllocator,
+    player_id_allocator: IdAllocator,
 
-    moved_entity_positions: Vec<Vec3>,
-    moved_entity_data: Vec<(NetworkId, Vec3, Vec2)>, // (id, delta_pos, delta_yaw_pitch)
+    channels: Channels,
+    entity_trackers: Vec<Option<EntityTracker>>,
+
+    entity_state_buf: Vec<(NetworkId, EntityStateMsg)>,
 }
 
 impl Network {
     pub fn network_thread_alive(&self) -> bool {
         !self.handle.closed()
     }
-}
 
-pub fn broadcast_chat(message: SharedStr, world: &mut World) {
-    for (_, connection) in world.query_mut::<&mut PlayerConnection>() {
-        if let Err(e) = connection.chat_send.send(message.clone()) {
-            eprintln!("Failed to send chat message: {e}");
+    pub fn track_entity_add(&mut self, new_entity: Entity, nid: NetworkId) -> anyhow::Result<()> {
+        self.entity_mapping.add_mapping(nid, new_entity)
+    }
+
+    pub fn track_entity_remove(&mut self, nid: NetworkId) -> anyhow::Result<Entity> {
+        self.entity_mapping.remove_mapping(nid)
+    }
+
+    pub fn broadcast_chat(&mut self, message: SharedStr) {
+        for channel in self.channels.chat.iter_mut().flatten() {
+            if let Err(e) = channel.send(message.clone()) {
+                eprintln!("Failed to send chat message: {e}");
+            }
         }
     }
 }
 
-pub fn tick(res: &mut Resources) {
-    poll_joins(res);
+
+pub fn tick(res: &mut Resources) -> anyhow::Result<()> {
+    // Process any incoming login attempts and add new players to the server
+    poll_joins(res)?;
+    // Broadcast recent chat messages to everybody
+    broadcast_chat_messages(res);
+    // Process received player state messages (position, facing)
+    process_player_state(res);    
+    // For each player: 
+    // - detect entities the player can now see that it previously couldn't and send spawn message,
+    // - detect entities the player can no longer see, send despawn message
+    // - send entity data update message for each currently visible entity
+    update_entity_trackers(res);
+
+    Ok(())
+}
+
+fn process_player_state(res: &mut Resources) {
     let net = &mut res.net;
-
     let handle = &mut net.handle;
-    while let Ok((_, message)) = handle.channels.chat_recv.try_recv() {
-        broadcast_chat(message, &mut res.main_world);
-    }
-
     while let Ok((id, msg)) = handle.channels.player_state_recv.try_recv() {
-        let Some(entity) = net.id_manager.get_entity(id) else {
-            debug_assert!(false, "ERROR: Received PlayerStateMsg from player with no entity mapping! Network id: {}", id.raw());
-            continue;
+        let Some(entity) = net.entity_mapping.get(id) else {
+            continue; // Fine: might have just disconnected
         };
         let entity = res.main_world.entity(entity).unwrap();
 
         if let Some(delta) = msg.delta_pos {
             let mut pos = entity.get::<&mut Position>().unwrap();
-            pos.xyz += delta;
-            //println!("Delta for tick {}: {:.8}, {:.8}, {:.8}, pos {:.8}, {:.8}, {:.8}", msg.tick, delta.x, delta.y, delta.z, pos.xyz.x, pos.xyz.y, pos.xyz.z);
+            pos.0 += delta;
+            //println!("Delta for tick {}: {:.8}, {:.8}, {:.8}, pos {:.8}, {:.8}, {:.8}", msg.tick, delta.x, delta.y, delta.z, pos.0.x, pos.0.y, pos.0.z);
         }
 
         if let Some(delta) = msg.delta_yaw_pitch {
             let mut rot = entity.get::<&mut HeadYawPitch>().unwrap();
-            rot.v += delta;
+            rot.value += delta;
             rot.delta += delta;
 
             //println!("Rot delta for tick {}: {:.8}, {:.8}, rot: {:.8}, {:.8}", msg.tick, delta.x.to_degrees(), delta.y.to_degrees(), rot.0.x.to_degrees(), rot.0.y.to_degrees());
         }
     }
+}
 
-    net.moved_entity_data.clear();
-    net.moved_entity_positions.clear();
-    for (_, (new_pos, old_pos, head_rot, id)) in res.main_world.query_mut::<(&Position, &mut OldPosition, &mut HeadYawPitch, &NetworkId)>() {
-        if head_rot.delta != Vec2::ZERO || old_pos.0 != new_pos.xyz {
-            net.moved_entity_positions.push(new_pos.xyz);
-            net.moved_entity_data.push((*id, new_pos.xyz - old_pos.0, head_rot.delta));
-        }
-        head_rot.delta = Vec2::ZERO;
-        old_pos.0 = new_pos.xyz;
-    }
+fn update_entity_trackers(res: &mut Resources) {
+    const ADD_THRESHOLD_SQ : f32 = 64.0 * 64.0;
+    const REMOVE_THRESHOLD_SQ : f32 = 80.0 * 80.0;
+
+    // TODO: O(n²). This ought to change once chunks are a thing and tracking of adds/removes can be done
+    // when an entity crosses a chunk boundary, after which it is enough to iterate over only seen entities.
+    // At that point, consider replacing HashSet with a dense tree structure (such as binary heap modified to
+    // remove duplicates)
+    let buf = &mut res.net.entity_state_buf;
     
-
-    // O(N²) let's go! Would be trivially parallelizable IF PlayerConnection was not a component.
-    // TODO: heavily consider just keeping an array of PlayerConnections in Network. Or even better,
-    // a vec per stream type in AoS style.
-    let mut buf = [0u8; 2048];
-    for (_, (_, _, channels)) in res.main_world.query_mut::<(&Position, &Facing, &mut PlayerConnection)>() {
-        let mut stream = ByteWriter::new_for_message(&mut buf);
-        for (id, delta_pos, delta_yaw_pitch) in net.moved_entity_data.iter().copied() {
-            stream.write_u16(id.raw() as _);
-            stream.write_u16(encode_velocity(delta_pos.x) as u16);
-            stream.write_u16(encode_velocity(delta_pos.y) as u16);
-            stream.write_u16(encode_velocity(delta_pos.z) as u16);
-            stream.write_u16(encode_angle_rad(wrap_angle(delta_yaw_pitch.x)));
-            stream.write_u16(encode_angle_rad(wrap_angle(delta_yaw_pitch.y)));
+    for tracker in res.net.entity_trackers.iter_mut().flatten() {
+        let player_pos = res.main_world.get::<&Position>(tracker.player_entity).unwrap().0;
+        
+        buf.clear();
+        for (entity, (&Position(position), &OldPosition(old_position), &id, &head_rotation)) 
+            in res.main_world.query_mut::<(&Position, &OldPosition, &NetworkId, &HeadYawPitch)>() {
+            let d = player_pos.distance_squared(position);
+            if d < ADD_THRESHOLD_SQ && tracker.entities.insert(entity) {
+                // Newly tracked, send spawn packet
+                buf.push((id, EntityStateMsg::EntityAdded {
+                    position, 
+                    head_rotation: head_rotation.value 
+                }));
+                println!("Adding entity {entity:?} to player {:?}'s tracker (d={d})", tracker.player_entity);
+            } 
+            else if d > REMOVE_THRESHOLD_SQ && tracker.entities.remove(&entity) {
+                buf.push((id, EntityStateMsg::EntityRemoved));
+                println!("Removing entity {entity:?} from player {:?}'s tracker (d={d})", tracker.player_entity);
+            } 
+            else if tracker.entities.contains(&entity) {
+                buf.push((id, EntityStateMsg::EntityMoved { 
+                    delta_pos: position - old_position, 
+                    delta_head_rotation: head_rotation.delta 
+                }));
+            }
         }
 
-        let len = stream.bytes_written();
-        if len > 2 {
-            stream.write_message_len();
-
-            if channels.entity_state.send(stream.bytes().into()).is_err() {
+        if !buf.is_empty() { // Don't send just current tick and length with nothing meaningful
+            if tracker.entity_state_channel.send((res.current_tick, buf.as_slice().into())).is_err() {
                 eprintln!("Failed to send entity state");
             }
         }
     }
-    //println!("End of network frame");
 }
 
-fn poll_joins(res: &mut Resources) {
+fn broadcast_chat_messages(res: &mut Resources) {
+    while let Ok((_, message)) = res.net.handle.channels.chat_recv.try_recv() {
+        res.net.broadcast_chat(message);
+    }
+}
+
+fn poll_joins(res: &mut Resources) -> anyhow::Result<()> {
     let net = &mut res.net;
     while let Some(evt) = net.handle.poll_joins() {
         match evt {
-            PlayersChanged::NetworkIdRequest { channel } => {
-                let player_entity = res.main_world.spawn(());
-                let id = net.id_manager.allocate_for(player_entity);
+            PlayersChanged::LoginRequest { channel, username: _ } => {
+                let id = NetworkId::from_raw(net.network_id_allocator.allocate() as RawNetworkId);
 
-                if let Err(e) = channel.try_send(id) {
-                    eprintln!("Failed to send network id to network thread: {e}");
+                let mut response_buf = [0u8; 128];
+                let mut writer = ByteWriter::new_for_message(&mut response_buf);
+                writer.write_u16(id.raw() as u16);
+                writer.write_f32(0.0); // X
+                writer.write_f32(0.0); // Y
+                writer.write_f32(0.0); // Z
+                writer.write_f32(0.0); // Yaw
+                writer.write_f32(0.0); // Pitch
+                writer.write_u64(0); // World seed
+                writer.write_message_len();
+
+                if channel.send((id, LoginResponse::Success(writer.bytes().into()))).is_err() {
+                    eprintln!("Failed to send network id to network thread!");
                 }
             }
             PlayersChanged::Connected {
@@ -124,117 +181,93 @@ fn poll_joins(res: &mut Resources) {
                 network_id,
                 channels,
             } => {
-                println!(
-                    "Player login finished! Username: {username}, network id: {}",
-                    network_id.raw()
-                );
+                println!("Player login finished! Username: {username}, network id: {network_id}");
 
-                let Some(entity) = net.id_manager.get_entity(network_id) else {
-                    eprintln!("player login finished, but id -> entity mapping has been removed?!");
-                    continue;
-                };
+                net.broadcast_chat(format!("{username} joined").into());
 
-                broadcast_chat(
-                    format!("{username} joined").to_shared_str(),
-                    &mut res.main_world,
-                );
-
-                if res
-                    .main_world
-                    .insert(
-                        entity,
-                        (
-                            network_id,
-                            Username(username),
-                            channels,
-                            Position { xyz: Vec3::ZERO },
-                            OldPosition(Vec3::ZERO),
-                            Facing(Vec3::X),
-                            HeadYawPitch{ v: Vec2::ZERO, delta: Vec2::ZERO }
-                        ),
-                    )
-                    .is_err()
-                {
-                    eprintln!("Entity was removed from world when player was connecting?!");
-                }
+                let player_id = PlayerId::from_raw(net.player_id_allocator.allocate() as _);
+                let entity = components::spawn_player(&mut res.main_world, PlayerBundle {
+                    nid: network_id,
+                    player_id,
+                    username,
+                    position: Vec3::ZERO,
+                    head_rotation: YawPitch::ZERO,
+                });
+                net.track_entity_add(entity, network_id)?;
+                place_at(&mut net.channels.chat, player_id.raw() as usize, Some(channels.chat_send));
+                place_at(&mut net.entity_trackers, player_id.raw() as usize, Some(EntityTracker {
+                    player_entity: entity,
+                    entities: HashSet::new(),
+                    entity_state_channel: channels.entity_state
+                }));
             }
             PlayersChanged::Disconnect { network_id } => {
-                let entity = net.id_manager.free(network_id);
+                let entity = net.track_entity_remove(network_id)?;
+                net.network_id_allocator.free(network_id.raw() as u16);
                 println!("Player with network id {network_id} disconnected");
 
-                let username = &res.main_world.get::<&Username>(entity).unwrap().0.clone();
+                let player_id = *res.main_world.get::<&PlayerId>(entity).unwrap();
+                let username = &res.main_world.remove_one::<Username>(entity).unwrap().0;
 
-                broadcast_chat(
-                    format!("{username} disconnected").to_shared_str(),
-                    &mut res.main_world,
-                );
+                net.broadcast_chat(format!("{username} disconnected").into());
 
+                place_at(&mut net.channels.chat, player_id.raw() as usize, None);
+                place_at(&mut net.entity_trackers, player_id.raw() as usize, None);
                 if res.main_world.despawn(entity).is_err() {
-                    eprintln!("ERR: disconnect: entity was already despawned");
+                    eprintln!("disconnect: entity was already despawned");
                 }
             }
         }
     }
+    Ok(())
 }
 
-// Manages allocating and freeing network ids, and provides
-// a mapping from network id to the entity.
-//
-// Importantly, makes sure that
-//  1. Network IDs are always unique.
-//  2. Network IDs are always densely allocated.
-//     If ID 533 is allocated, then every ID before that
-//     should also be allocated for some entity currently
-//     in the world.
-//
-// Low-level tool: one must not forget to deallocate the ID.
-pub struct NetworkIdManager {
-    recycled_ids: Vec<NetworkId>,
+fn place_at<T>(vec: &mut Vec<T>, idx: usize, t: T) {
+    debug_assert!(idx <= vec.len(), "idx = {idx}, vec.len() = {}", vec.len());
+    if idx >= vec.len() {
+        vec.push(t);
+    } else {
+        vec[idx] = t;
+    }
+}
 
-    // grows monotonically => always guaranteed to be unused
-    // id 0 is never assigned to anything and is reserved as 'invalid'
-    next_unused: RawNetworkId,
-
-    // Mapping from NetworkId to Entity
+pub struct NidEntityMapping {
     mapping: Vec<(NetworkId, Entity)>,
 }
 
-impl Default for NetworkIdManager {
-    fn default() -> Self {
+impl NidEntityMapping {
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            recycled_ids: Vec::with_capacity(128),
-            next_unused: 1,
-            mapping: vec![(NetworkId::from_raw(0), Entity::DANGLING); 128],
+            mapping: Vec::with_capacity(capacity)
         }
     }
-}
 
-impl NetworkIdManager {
-    // Allocates a unique network ID for the entity.
-    pub fn allocate_for(&mut self, entity: Entity) -> NetworkId {
-        let id = self.recycled_ids.pop().unwrap_or_else(|| {
-            self.next_unused += 1;
-            NetworkId::from_raw(self.next_unused - 1)
-        });
+    pub fn add_mapping(&mut self, id: NetworkId, entity: Entity) -> anyhow::Result<()> {
+        if self.mapping.len() <= id.raw() as usize {
+            self.mapping.resize(id.raw() as usize + 1, (NetworkId::INVALID, Entity::DANGLING));
+        }
+
+        if self.mapping[id.raw() as usize].0 != NetworkId::INVALID {
+            anyhow::bail!("Id {id} is already mapped to an entity!");
+        }
 
         self.mapping[id.raw() as usize] = (id, entity);
-
-        id
+        Ok(())
     }
 
-    pub fn free(&mut self, id: NetworkId) -> Entity {
-        debug_assert!(id.raw() < self.next_unused);
-        debug_assert!(!self.recycled_ids.contains(&id));
-        debug_assert!(self.mapping[id.raw() as usize].0 == id);
+    pub fn remove_mapping(&mut self, id: NetworkId) -> anyhow::Result<Entity> {
+        let idx = id.raw() as usize;
+        if idx >= self.mapping.len() || self.mapping[idx].0 != id {
+            anyhow::bail!("remove_mapping(): was mapped to ({}, {:?}) instead of input ({})",
+                self.mapping[idx].0, self.mapping[idx].1,
+                id,
+            );
+        }
 
-        let entity = self.mapping[id.raw() as usize].1;
-
-        self.recycled_ids.push(id);
-        self.mapping[id.raw() as usize] = (NetworkId::from_raw(0), Entity::DANGLING);
-        entity
+        Ok(std::mem::replace(&mut self.mapping[idx], (NetworkId::INVALID, Entity::DANGLING)).1)
     }
 
-    pub fn get_entity(&self, id: NetworkId) -> Option<Entity> {
+    pub fn get(&self, id: NetworkId) -> Option<Entity> {
         let (mapped_id, entity) = self.mapping[id.raw() as usize];
         if mapped_id != id {
             None
@@ -244,17 +277,70 @@ impl NetworkIdManager {
     }
 }
 
+pub struct IdAllocator {
+    recycled_ids: BinaryHeap<i16>,
+
+    // grows monotonically => always guaranteed to be unused
+    // id 0 is never assigned to anything and is reserved as 'invalid'
+    next_unused_id: u16,
+
+    #[cfg(debug_assertions)]
+    allocated_ids: HashSet<u16>,
+}
+
+impl IdAllocator {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            recycled_ids: BinaryHeap::with_capacity(capacity),
+            next_unused_id: 1,
+
+            #[cfg(debug_assertions)]
+            allocated_ids: HashSet::new(),
+        }
+    }
+
+    pub fn allocate(&mut self) -> u16 {
+        let id = self.recycled_ids
+            .pop()
+            .map(|neg| (-neg) as u16)
+            .unwrap_or_else(|| {
+                self.next_unused_id += 1;
+                self.next_unused_id - 1
+            });
+
+        if cfg!(debug_assertions) {
+            debug_assert!(self.allocated_ids.insert(id), "Returned an already-allocated ID!");
+        }
+
+        id
+    }
+
+    pub fn free(&mut self, id: u16) {
+        debug_assert!(id < self.next_unused_id);
+        self.recycled_ids.push(-(id as i16)); // reverse order to make min heap
+
+        if cfg!(debug_assertions) {
+            debug_assert!(self.allocated_ids.remove(&id), "Tried to remove an ID ({id}) that was not allocated!");
+        }
+    }
+}
+
 #[derive(Debug)]
-pub struct PlayerConnection {
+pub struct PlayerChannels {
     pub chat_send: UnboundedSender<SharedStr>,
-    pub entity_state: UnboundedSender<Box<[u8]>>,
+    pub entity_state: UnboundedSender<(u32, Box<[(NetworkId, EntityStateMsg)]>)>,
 }
 
 pub fn init() -> Result<Network> {
     Ok(Network {
         handle: crate::networking::init()?,
-        id_manager: NetworkIdManager::default(),
-        moved_entity_data: Vec::new(),
-        moved_entity_positions: Vec::new(),
+        entity_mapping: NidEntityMapping::with_capacity(128),
+        network_id_allocator: IdAllocator::with_capacity(128),
+        player_id_allocator: IdAllocator::with_capacity(8),
+        channels: Channels {
+            chat: vec![None]
+        },
+        entity_trackers: vec![None],
+        entity_state_buf: Vec::new(),
     })
 }

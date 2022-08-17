@@ -4,7 +4,7 @@ use anyhow::bail;
 use erupt::vk;
 use flexstr::ToSharedStr;
 use winit::{
-    event::{ElementState, Event, MouseButton, WindowEvent},
+    event::{ElementState, Event, MouseButton, WindowEvent, KeyboardInput},
     window::CursorIcon,
 };
 
@@ -57,10 +57,6 @@ impl State for UsernameQueryState {
         &mut self,
         res: &mut crate::resources::Resources,
     ) -> Option<Box<crate::game::StateChange>> {
-        if let Some(state) = self.process_inputs(res) {
-            return Some(state);
-        }
-
         let renderer = &mut res.renderer;
         let wsize = res.window_size.extent;
         let wsize = (wsize.width as u16, wsize.height as u16);
@@ -146,23 +142,36 @@ impl State for UsernameQueryState {
             return None;
         }
 
-        if let Event::WindowEvent { event, .. } = event {
-            match self.selected {
-                0 => {
-                    self.username_box.process_event(event, res);
-                }
-                1 => {
-                    self.address_box.process_event(event, res);
-                }
-                _ => {}
-            }
+        let Event::WindowEvent{ event, .. } = event else {
+            return None;
+        };
+
+        match self.selected {
+            0 if self.username_box.process_event(event, res) => return None,
+            1 if self.address_box.process_event(event, res) => return None,
+            _ => {}
         }
 
         match event {
-            Event::WindowEvent {
-                event: WindowEvent::MouseInput { state, button, .. },
-                ..
-            } => {
+            WindowEvent::KeyboardInput { 
+                input: KeyboardInput{ virtual_keycode: Some(Key::Tab), state: ElementState::Pressed, .. }, .. 
+            } if !res.input.keyboard_mods.alt() => {
+                if res.input.keyboard_mods.shift() {
+                    if self.selected == 0 {
+                        self.selected = 3;
+                    } else {
+                        self.selected -= 1;
+                    }
+                } else {
+                    if self.selected == 3 {
+                        self.selected = 0;
+                    } else {
+                        self.selected += 1;
+                    }
+                }
+            }
+
+            WindowEvent::MouseInput { state, button, .. } => {
                 if self.hovered != u32::MAX
                     && *state == ElementState::Pressed
                     && *button == MouseButton::Left
@@ -199,46 +208,6 @@ impl State for UsernameQueryState {
                 }
             }
             _ => {}
-        }
-        None
-    }
-}
-
-impl UsernameQueryState {
-    fn process_inputs(&mut self, res: &mut Resources) -> Option<Box<StateChange>> {
-        let inputs = &mut res.input;
-
-        if [2, 3].contains(&self.selected) {
-            if inputs.keyboard.release(Key::Right) || inputs.keyboard.release(Key::Left) {
-                if self.selected == 2 {
-                    self.selected = 3;
-                } else {
-                    self.selected = 2;
-                }
-            }
-            if inputs.keyboard.release(Key::Up) {
-                self.selected = 1;
-            }
-            if inputs.keyboard.release(Key::Down) {
-                self.selected = 0;
-            }
-        }
-
-        if !inputs.keyboard.pressed(Key::LAlt) && inputs.keyboard.release(Key::Tab) {
-            if inputs.keyboard.pressed(Key::LShift) {
-                if self.selected == 0 {
-                    self.selected = 3;
-                } else {
-                    self.selected -= 1;
-                }
-            } else {
-                if self.selected == 3 {
-                    self.selected = 0;
-                } else {
-                    self.selected += 1;
-                }
-            }
-            return None;
         }
 
         None
@@ -547,10 +516,10 @@ impl UsernameQueryState {
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:[]."
                 .chars()
                 .collect();
-
+                
         Ok(Self {
             username_box: TextBoxBuilder::new_at(93, 317)
-                .with_length_limit(130)
+                .with_length_limit(14)
                 .with_valid_chars(valid_username_chars)
                 .with_width(246 - 2 * 16)
                 .build(),

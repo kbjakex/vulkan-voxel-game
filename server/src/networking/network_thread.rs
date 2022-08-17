@@ -12,7 +12,7 @@ use tokio::{
     task,
 };
 
-use crate::{networking::login};
+use crate::{networking::login, components::NetworkId};
 
 use super::PlayersChanged;
 
@@ -24,12 +24,12 @@ pub struct PlayerStateMsg {
 }
 #[derive(Clone)]
 pub struct NetSideChannels {
-    pub chat_send: UnboundedSender<(shared::protocol::NetworkId, SharedStr)>,
+    pub chat_send: UnboundedSender<(NetworkId, SharedStr)>,
     pub player_join_send: UnboundedSender<PlayersChanged>,
-    pub player_state_send: UnboundedSender<(shared::protocol::NetworkId, PlayerStateMsg)>
+    pub player_state_send: UnboundedSender<(NetworkId, PlayerStateMsg)>
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 3)]
 pub async fn start(
     tx: oneshot::Sender<bool>,
     channels: NetSideChannels,
@@ -65,10 +65,12 @@ async fn poll_new_connections(
 
         println!("Connection established!");
 
-        task::spawn(login::login(
-            new_conn,
-            channels.clone()
-        ));
+        let channels = channels.clone();
+        task::spawn(async move {
+            if let Err(e) = login::login(new_conn, channels).await {
+                println!("Login attempt failed: {e}");
+            }
+        });
     }
 }
 

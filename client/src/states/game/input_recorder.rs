@@ -2,7 +2,7 @@ use std::f64::consts::PI;
 
 use glam::{vec2, vec3, DVec2, DVec3, Vec2, Vec3};
 use shared::{
-    protocol::{decode_angle_rad, decode_velocity, encode_angle_rad, encode_velocity, wrap_angle},
+    protocol::{decode_angle_rad, decode_velocity, encode_angle_rad, encode_velocity, wrap_angle, wrap_angles},
     TICKS_PER_SECOND,
 };
 use smallvec::SmallVec;
@@ -45,7 +45,7 @@ impl Integrator {
         vel: DVec3,
         yaw_pitch: DVec2,
         dt_secs: f64,
-        frame_velocities_out: &mut SmallVec<[(Velocity, YawPitch); 4]>,
+        frame_velocities_out: &mut SmallVec<[(Velocity, YawPitch, Vec3); 4]>,
     ) -> (Position, YawPitch) {
         const NW_TICK: f64 = 1.0 / TICKS_PER_SECOND as f64;
 
@@ -56,17 +56,18 @@ impl Integrator {
             let carry_a = self.prev_angle * k;
 
             let total_v = Self::round_velocity(self.vel_accum - carry_v);
-            let total_a = Self::round_angles(self.angle_accum - carry_a);
+            let total_a = wrap_angles(Self::round_angles(self.angle_accum - carry_a));
 
             self.time_accum -= NW_TICK;
             self.vel_accum = carry_v;
             self.angle_accum = carry_a;
             self.vel_origin += total_v;
-            self.angle_origin += total_a;
+            self.angle_origin = wrap_angles(self.angle_origin + total_a);
 
             frame_velocities_out.push((
                 Velocity(total_v),
                 YawPitch(total_a.x as f32, total_a.y as f32),
+                self.vel_origin
             ));
         }
 

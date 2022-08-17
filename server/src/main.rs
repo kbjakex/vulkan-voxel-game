@@ -11,11 +11,6 @@ use std::{
     time::{Duration, Instant}, sync::atomic::{AtomicBool, Ordering},
 };
 
-use flexstr::SharedStr;
-use shared::TICK_DURATION;
-
-pub struct Username(pub SharedStr);
-
 pub fn main() {
     runner();
     println!("Server stopped.");
@@ -33,11 +28,13 @@ fn runner() {
     let mut last_sec = Instant::now();
     let mut updates = 0;
 
-    let mut tick = 0u32;
     let server_start_time = Instant::now();
     while !SHOULD_STOP.load(Ordering::Relaxed) {
-        server::tick(&mut state);
-        tick += 1;
+        if let Err(e) = server::tick(&mut state) {
+            eprintln!("Error while ticking server: {e}");
+        }
+
+        state.current_tick += 1;
 
         if !state.net.network_thread_alive() {
             println!("Network thread crashed!");
@@ -53,7 +50,7 @@ fn runner() {
             updates = 0;
         }
 
-        let target = server_start_time + tick * TICK_DURATION;
+        let target = server_start_time + state.current_tick * shared::TICK_DURATION;
         if time < target {
             std::thread::sleep(target - time);
         }
@@ -63,15 +60,3 @@ fn runner() {
     server::shutdown(state);
 }
 
-/* let mut app = GameBuilder::new_with_runner(runner);
-
-networking::init(&mut app)?;
-
-     app.add_stage(CoreStage::GameTick, SystemStage::single_threaded())
-        .add_stage("Tick Loop", SystemStage::single_threaded())
-        .add_system(players_changed_listener.exclusive_system())
-        .add_system(chat_handler.exclusive_system())
-        .insert_resource(NetworkIdAllocator::default())
-        .insert_resource(NetworkIdToEntityMap::default());
-
-    app.run();*/
