@@ -147,8 +147,8 @@ impl State for UsernameQueryState {
         };
 
         match self.selected {
-            0 if self.username_box.process_event(event, res) => return None,
-            1 if self.address_box.process_event(event, res) => return None,
+            0 => { self.username_box.process_event(event, res); },
+            1 => { self.address_box.process_event(event, res); },
             _ => {}
         }
 

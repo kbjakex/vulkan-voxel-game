@@ -9,6 +9,8 @@ use tokio::sync::{
     oneshot,
 };
 
+use crate::states::game::input_recorder::InputSnapshot;
+
 use self::network_thread::NetSideChannels;
 
 pub mod connection;
@@ -36,12 +38,19 @@ pub enum EntityStateMsg {
         id: NetworkId,
         delta_pos: Vec3,
         delta_head_rotation: Vec2,
+    },
+    InputValidated {
+        tag: u16,
+        packets_lost: u8,
+        server_pos: Vec3,
+        server_head_rot: Vec2,
     }
 }
 
 pub enum S2C {
     Chat(SharedStr),
-    EntityState(u16, Box<[EntityStateMsg]>),
+    EntityState(Box<[EntityStateMsg]>),
+    Statistics{ ping: u32, }
 }
 
 #[derive(Copy, Clone)]
@@ -53,7 +62,7 @@ pub struct Channels {
     pub incoming: tokio::sync::mpsc::Receiver<S2C>,
 
     pub chat: UnboundedSender<SharedStr>,
-    pub player_state: UnboundedSender<Box<[u8]>>,
+    pub player_state: UnboundedSender<Box<[InputSnapshot]>>,
 
     pub on_disconnect: oneshot::Receiver<DisconnectReason>,
     pub stop_network_thread: Option<oneshot::Sender<()>>,

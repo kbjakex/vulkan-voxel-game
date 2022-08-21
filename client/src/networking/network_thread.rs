@@ -14,7 +14,7 @@ use tokio::{
     task,
 };
 
-use crate::networking::connection::{self, receive_bytes};
+use crate::{networking::connection::{self, receive_bytes}, states::game::input_recorder::InputSnapshot};
 
 use anyhow::Result;
 
@@ -23,7 +23,7 @@ use super::{DisconnectReason, S2C, LoginResponse};
 pub struct NetSideChannels {
     pub incoming: Sender<S2C>,
     pub chat_recv: UnboundedReceiver<SharedStr>,
-    pub player_state: UnboundedReceiver<Box<[u8]>>,
+    pub player_state: UnboundedReceiver<Box<[InputSnapshot]>>,
     pub on_lost_connection: oneshot::Sender<DisconnectReason>,
 
     pub stop_command: oneshot::Receiver<()>,
@@ -65,10 +65,12 @@ async fn start_inner(
 
     let mut player_state_send = new_conn.connection.open_uni().await?;
     player_state_send.write(&[0]).await?;
-    let player_fut = task::spawn(connection::player_state::send_driver(
-        player_state_send,
-        channels.player_state,
-    ));
+    let incoming = channels.incoming.clone();
+    let player_fut = task::spawn(async { 
+        if let Err(e) = connection::player_state::send_driver(new_conn.connection, incoming, channels.player_state).await {
+            eprintln!("player state send driver failed with {e}");
+        }
+    });
 
     let mut entity_state_recv = new_conn.uni_streams.next().await.unwrap()?;
     entity_state_recv.read_exact(&mut [0u8]).await?; // Read the byte used to open the channel

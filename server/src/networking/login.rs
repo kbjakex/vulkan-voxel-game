@@ -20,7 +20,7 @@ pub(super) async fn login(
     let (mut hello_send, mut hello_recv) = connection.bi_streams.next().await.unwrap()?;
 
     let mut recv_buf = Vec::new();
-    let mut reader = receive_bytes(&mut hello_recv, &mut recv_buf).await?;
+    let mut reader = receive_bytes(&mut hello_recv, &mut recv_buf, 32).await?;
     println!("Received login message! Length: {}", reader.bytes_remaining());
     
     if reader.bytes_remaining() < 6 // magic + protocol ver + username length + username >= 6
@@ -93,10 +93,10 @@ async fn client_connection(
     };
 
     let player_state_recv_driver = {
-        let mut stream = connection.uni_streams.next().await.unwrap()?;
+/*         let mut stream = connection.uni_streams.next().await.unwrap()?;
         stream.read_exact(&mut [0u8]).await?;
-
-        task::spawn(client_connection::player_state::recv_driver(network_id, stream, channels.player_state_send))
+ */
+        task::spawn(client_connection::player_state::recv_driver(network_id, connection.datagrams, channels.player_state_send))
     };
 
     let entity_state_send_driver = {

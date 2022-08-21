@@ -18,7 +18,7 @@ use super::PlayersChanged;
 
 #[derive(Debug)]
 pub struct PlayerStateMsg {
-    pub tick: u32,
+    pub tag: u16,
     pub delta_pos: Option<Vec3>,
     pub delta_yaw_pitch: Option<Vec2>,
 }
@@ -26,7 +26,7 @@ pub struct PlayerStateMsg {
 pub struct NetSideChannels {
     pub chat_send: UnboundedSender<(NetworkId, SharedStr)>,
     pub player_join_send: UnboundedSender<PlayersChanged>,
-    pub player_state_send: UnboundedSender<(NetworkId, PlayerStateMsg)>
+    pub player_state_send: UnboundedSender<(NetworkId, u32, PlayerStateMsg)>
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 3)]

@@ -11,7 +11,7 @@ use anyhow::Result;
 
 use crate::{
     components::{OldPosition, Position, HeadYawPitch, self, PlayerBundle, YawPitch, Username, PlayerId},
-    networking::{NetHandle, PlayersChanged, LoginResponse, client_connection::entity_state::EntityStateMsg},
+    networking::{NetHandle, PlayersChanged, LoginResponse, client_connection::entity_state::{EntityStateMsg, EntityStateOut}},
     resources::Resources,
 };
 
@@ -19,10 +19,13 @@ struct Channels {
     chat: Vec<Option<UnboundedSender<SharedStr>>>,
 }
 
-struct EntityTracker {
+struct EntityStateTracker {
     player_entity: Entity,
     entities: HashSet<Entity>,
-    entity_state_channel: UnboundedSender<(u32, Box<[(NetworkId, EntityStateMsg)]>)>,
+    entity_state_channel: UnboundedSender<EntityStateOut>,
+
+    last_player_input_tag: Option<u16>,
+    packets_lost: u8,
 }
 
 // A main-thread controller for anything related to networking.
@@ -34,7 +37,7 @@ pub struct Network {
     player_id_allocator: IdAllocator,
 
     channels: Channels,
-    entity_trackers: Vec<Option<EntityTracker>>,
+    entity_trackers: Vec<Option<EntityStateTracker>>,
 
     entity_state_buf: Vec<(NetworkId, EntityStateMsg)>,
 }
@@ -68,6 +71,8 @@ pub fn tick(res: &mut Resources) -> anyhow::Result<()> {
     // Broadcast recent chat messages to everybody
     broadcast_chat_messages(res);
     // Process received player state messages (position, facing)
+    // Should be before `update_entity_trackers` to immediately send back
+    // the tag of the most recently processed input
     process_player_state(res);    
     // For each player: 
     // - detect entities the player can now see that it previously couldn't and send spawn message,
@@ -81,15 +86,21 @@ pub fn tick(res: &mut Resources) -> anyhow::Result<()> {
 fn process_player_state(res: &mut Resources) {
     let net = &mut res.net;
     let handle = &mut net.handle;
-    while let Ok((id, msg)) = handle.channels.player_state_recv.try_recv() {
-        let Some(entity) = net.entity_mapping.get(id) else {
+    while let Ok((nid, packet_loss, msg)) = handle.channels.player_state_recv.try_recv() {
+        let Some(entity) = net.entity_mapping.get(nid) else {
             continue; // Fine: might have just disconnected
         };
         let entity = res.main_world.entity(entity).unwrap();
 
+        if let Some(tracker) = net.entity_trackers[entity.get::<&PlayerId>().unwrap().raw() as usize].as_mut() {
+            tracker.last_player_input_tag = Some(msg.tag);
+            tracker.packets_lost = tracker.packets_lost.wrapping_add(packet_loss as u8);
+        }
+
         if let Some(delta) = msg.delta_pos {
             let mut pos = entity.get::<&mut Position>().unwrap();
             pos.0 += delta;
+            //println!("Pos @ {}: {:.8}, {:.8}, {:.8}", msg.tag, o.x, o.y, o.z);
             //println!("Delta for tick {}: {:.8}, {:.8}, {:.8}, pos {:.8}, {:.8}, {:.8}", msg.tick, delta.x, delta.y, delta.z, pos.0.x, pos.0.y, pos.0.z);
         }
 
@@ -104,8 +115,8 @@ fn process_player_state(res: &mut Resources) {
 }
 
 fn update_entity_trackers(res: &mut Resources) {
-    const ADD_THRESHOLD_SQ : f32 = 64.0 * 64.0;
-    const REMOVE_THRESHOLD_SQ : f32 = 80.0 * 80.0;
+    const ADD_THRESHOLD_SQ : f32 = 144.0 * 144.0;
+    const REMOVE_THRESHOLD_SQ : f32 = 160.0 * 160.0;
 
     // TODO: O(n²). This ought to change once chunks are a thing and tracking of adds/removes can be done
     // when an entity crosses a chunk boundary, after which it is enough to iterate over only seen entities.
@@ -140,11 +151,20 @@ fn update_entity_trackers(res: &mut Resources) {
             }
         }
 
-        if !buf.is_empty() { // Don't send just current tick and length with nothing meaningful
-            if tracker.entity_state_channel.send((res.current_tick, buf.as_slice().into())).is_err() {
-                eprintln!("Failed to send entity state");
-            }
+        let msg = EntityStateOut {
+            player_input_tag: tracker.last_player_input_tag,
+            packets_lost: tracker.packets_lost,
+            player_pos,
+            player_head_rot: res.main_world.get::<&HeadYawPitch>(tracker.player_entity).unwrap().value,
+            changes: buf.clone(), // Does not allocate if empty
+        };
+        
+        if tracker.entity_state_channel.send(msg).is_err() {
+            eprintln!("Failed to send entity state");
         }
+
+        tracker.last_player_input_tag = None;
+        tracker.packets_lost = 0;
     }
 }
 
@@ -195,10 +215,12 @@ fn poll_joins(res: &mut Resources) -> anyhow::Result<()> {
                 });
                 net.track_entity_add(entity, network_id)?;
                 place_at(&mut net.channels.chat, player_id.raw() as usize, Some(channels.chat_send));
-                place_at(&mut net.entity_trackers, player_id.raw() as usize, Some(EntityTracker {
+                place_at(&mut net.entity_trackers, player_id.raw() as usize, Some(EntityStateTracker {
                     player_entity: entity,
                     entities: HashSet::new(),
-                    entity_state_channel: channels.entity_state
+                    entity_state_channel: channels.entity_state,
+                    last_player_input_tag: None,
+                    packets_lost: 0
                 }));
             }
             PlayersChanged::Disconnect { network_id } => {
@@ -328,7 +350,7 @@ impl IdAllocator {
 #[derive(Debug)]
 pub struct PlayerChannels {
     pub chat_send: UnboundedSender<SharedStr>,
-    pub entity_state: UnboundedSender<(u32, Box<[(NetworkId, EntityStateMsg)]>)>,
+    pub entity_state: UnboundedSender<EntityStateOut>,
 }
 
 pub fn init() -> Result<Network> {

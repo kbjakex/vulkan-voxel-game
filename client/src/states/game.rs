@@ -8,10 +8,9 @@ use flexstr::{SharedStr, ToLocalStr};
 use glam::{vec2, EulerRot, Mat4, Vec2, Vec3};
 use hecs::Entity;
 use shared::{
-    bits_and_bytes::{ByteReader, ByteWriter},
-    protocol::{encode_angle_rad, encode_velocity, NetworkId},
+    jitter_prevention::{JitterPrevention, DELAY_MS},
+    protocol::NetworkId,
 };
-use smallvec::SmallVec;
 use vkcore::{Buffer, BufferAllocation, UsageFlags, VkContext};
 use winit::{
     dpi::LogicalPosition,
@@ -22,8 +21,7 @@ use winit::{
 use crate::{
     chat::Chat,
     components::{
-        HeadRotation, OldHeadRotation, OldPosition, Position,
-        Velocity,
+        HeadRotation, OldHeadRotation, OldPosition, Position
     },
     game::{State, StateChange},
     input::{self, Key},
@@ -38,7 +36,7 @@ use crate::{
     },
     resources::{
         core::{Time, WindowSize},
-        game_state::{self, Net}, Resources,
+        game_state, Resources,
     },
     world::{
         chunk_renderer::ChunkRenderer,
@@ -48,7 +46,7 @@ use crate::{
 
 use self::{
     camera::Camera,
-    input_recorder::{InputRecorder, YawPitch},
+    input_recorder::{InputRecorder, YawPitch, InputSnapshot},
 };
 
 use super::connection_lost::ConnectionLostState;
@@ -56,10 +54,17 @@ use super::connection_lost::ConnectionLostState;
 pub struct GameState {
     pub res: game_state::Resources,
 
+    jitter_buf: JitterPrevention<Box<[EntityStateMsg]>>,
+
+    artificial_delay: JitterPrevention<Box<[InputSnapshot]>>,
+
+    is_network_tick: bool,
+    packets_lost: u32,
+    packets_sent: u32,
+    ping: u32,
+
     // Raw mouse motion; for camera only
     mouse_move_accumulator: Vec2,
-
-    tick: u32,
 
     grid_vbo: VertexBuffer,
     cube_vbo: VertexBuffer,
@@ -67,8 +72,8 @@ pub struct GameState {
 
 impl State for GameState {
     fn on_enter(&mut self, res: &mut Resources) -> anyhow::Result<()> {
-        /*         res.renderer
-        .set_present_mode(vk::PresentModeKHR::MAILBOX_KHR)?; */
+        /* res.renderer
+            .set_present_mode(vk::PresentModeKHR::MAILBOX_KHR)?; */
 
         let size = res
             .window_handle
@@ -98,7 +103,7 @@ impl State for GameState {
     }
 
     fn on_update(&mut self, res: &mut Resources) -> Option<Box<StateChange>> {
-        self.update_camera(res);
+        self.is_network_tick = false;
         self.do_player_movement(res);
         self.update_net(res);
         if self.res.net.connection.closed() {
@@ -106,6 +111,7 @@ impl State for GameState {
                 ConnectionLostState::new(),
             ))));
         }
+        self.update_camera(res);
 
         if let Err(e) = self.res.chunks.tick(res) {
             eprintln!("Error in Chunks::tick(): {e}");
@@ -193,28 +199,12 @@ impl State for GameState {
 // Networking
 impl GameState {
     fn update_net(&mut self, res: &mut Resources) {
-        let net = &mut self.res.net;
+        //let net = &mut self.res.net;
 
-        net.connection.tick();
+        self.res.net.connection.tick();
 
-        if res.time.secs_f32 >= net.next_network_tick {
-            net.network_tick_count += 1;
-            net.next_network_tick =
-                (net.network_tick_count as f64 * shared::TICK_DURATION.as_secs_f64()) as f32;
-
-            for (_, (&Position(new), OldPosition(old))) in self.res.entities.query_mut::<(&Position, &mut OldPosition)>() {
-                *old = new;
-            }
-        }
-
-        let net = &mut self.res.net;
-        if let Some(channels) = net.connection.channels() {
-            let mut buf : SmallVec<[S2C; 16]> = SmallVec::new();
+        if let Some(channels) = self.res.net.connection.channels() {
             while let Ok(message) = channels.incoming.try_recv() {
-                buf.push(message);
-            }
-
-            for message in buf {
                 match message {
                     S2C::Chat(msg) => {
                         self.res.chat.add_chat_entry(
@@ -223,18 +213,50 @@ impl GameState {
                             res.time.secs_f32,
                         );
                     },
-                    S2C::EntityState(tick, changes) => {
-                        Self::process_entity_state_msg(&mut self.res.entities, net, tick, changes);
+                    S2C::EntityState(changes) => {
+                        self.jitter_buf.push(changes, res.time.ms_u32);
                     },
+                    S2C::Statistics { ping } => {
+                        self.ping = ping;
+                    }
                 }
+            }
+        }
+
+        while res.time.secs_f32 >= self.res.net.next_network_tick {
+            // TODO: move this out to a proper physics step
+            let vel = &mut self.res.the_player.vel;
+            *vel *= 0.95;
+            if vel.length() < 0.1 {
+                *vel = Vec3::ZERO;
+            }
+
+            self.is_network_tick = true;
+
+            self.res.net.network_tick_count += 1;
+            self.res.net.next_network_tick =
+                (self.res.net.network_tick_count as f64 * shared::TICK_DURATION.as_secs_f64()) as f32;
+
+            for (_, (&Position(new), OldPosition(old))) in self.res.entities.query_mut::<(&Position, &mut OldPosition)>() {
+                *old = new;
+            }
+
+            if let Some(changes) = self.jitter_buf.pop(res.time.ms_u32, DELAY_MS) {
+                self.process_entity_state_msg(changes);
             }
         }
     }
 
-    fn process_entity_state_msg(ecs: &mut ECS, net: &mut Net, tick: u16, updates: Box<[EntityStateMsg]>) {
+    fn process_entity_state_msg(&mut self, updates: Box<[EntityStateMsg]>) {
+        let ecs = &mut self.res.entities;
+        let net = &mut self.res.net;
+        
+        let own_id = net.nid;
+
         for msg in updates.iter().copied() {
             match msg {
                 EntityStateMsg::EntityAdded { id, position, head_rotation } => {
+                    if id == own_id { continue; }
                     let entity = ecs.spawn((
                         id,
                         Position(position),
@@ -255,6 +277,7 @@ impl GameState {
                     net.nid_to_entity_mapping[id.raw() as usize] = (id, entity);
                 },
                 EntityStateMsg::EntityRemoved { id } => {
+                    if id == own_id { continue; }
                     let mapping = net.nid_to_entity_mapping.get(id.raw() as usize).copied();
                     if let Some((check_id, entity)) = mapping && check_id == id {
                         ecs.despawn(entity).unwrap();
@@ -264,14 +287,30 @@ impl GameState {
                     }
                 },
                 EntityStateMsg::EntityMoved { id, delta_pos, delta_head_rotation } => {
+                    if id == own_id { continue; }
                     let mapping = net.nid_to_entity_mapping.get(id.raw() as usize).copied();
                     if let Some((check_id, entity)) = mapping && check_id == id {
+                        /* println!("Moving entity #{id} from {} by {}", 
+                            ecs.get::<&mut Position>(entity).unwrap().0, 
+                            delta_pos
+                        ); */
+                        //println!("MOVING ENTITY by {delta_pos} (len {:.4})", delta_pos.length());
                         ecs.get::<&mut Position>(entity).unwrap().0 += delta_pos;
                         ecs.get::<&mut HeadRotation>(entity).unwrap().0 += delta_head_rotation;
                     } else {
                         eprintln!("  ERROR  Tried to move entity with id {id} but it does not exist");
                     }
                 },
+                EntityStateMsg::InputValidated { tag, packets_lost, server_pos, server_head_rot } => {
+                    self.packets_lost += packets_lost as u32;
+                    let prediction_failed = self.res.input_recorder
+                        .process_server_authoritative_state(tag, server_pos, server_head_rot);
+
+                    if prediction_failed {
+                        println!("Prediction failed");
+                        self.res.the_player.vel = Vec3::ZERO;
+                    }
+                }
             }
         }
     }
@@ -286,29 +325,27 @@ impl GameState {
     }
 
     fn do_player_movement(&mut self, res: &mut Resources) {
-        let velocity = &mut self.res.the_player.vel;
-        *velocity *= 0.9;
-
         if self.res.chat.is_open() {
             return;
         }
-
+        
         let keyboard = &mut res.input.keyboard;
-
+        
         let right = keyboard.get_axis(Key::D, Key::A);
         let up = keyboard.get_axis(Key::Space, Key::LShift);
         let fwd = keyboard.get_axis(Key::W, Key::S);
-
+        
         if right != 0 || up != 0 || fwd != 0 {
             let (ys, yc) = self.res.camera.yaw().sin_cos();
             let fwd_dir = Vec3::new(yc, 0.0, ys);
             let up_dir = Vec3::Y;
             let right_dir = fwd_dir.cross(up_dir);
-
+            
             let hor_acc = (right as f32 * right_dir + fwd as f32 * fwd_dir).normalize_or_zero();
-            let acc = (hor_acc + up as f32 * up_dir) * 5.0;
-
-            *velocity = (*velocity + acc).clamp_length_max(20.0);
+            let acc = (hor_acc + up as f32 * up_dir) * 1.0;
+            
+            let velocity = &mut self.res.the_player.vel;
+            *velocity += acc;//.clamp_length_max(20.0);
         }
     } 
 
@@ -319,51 +356,23 @@ impl GameState {
         let mouse_motion = self.mouse_move_accumulator * mouse_speed;
         self.mouse_move_accumulator = Vec2::ZERO;
 
-        let mut nw_frames = SmallVec::new();
-        let new_pos = self.res.input_recorder.integrator.step(
-            self.res.the_player.vel.as_dvec3() * res.time.dt_secs as f64,
-            mouse_motion.as_dvec2(),
-            res.time.dt_secs as f64,
-            &mut nw_frames,
+        let (Position(new_pos), YawPitch(new_yaw, new_pitch)) = self.res.input_recorder.record(
+            self.res.the_player.vel,
+            mouse_motion,
+            res.time.dt_secs
         );
-        camera.move_to(new_pos.0 .0);
-        camera.set_rotation(new_pos.1 .0, new_pos.1 .1);
+        camera.move_to(new_pos);
+        camera.set_rotation(new_yaw, new_pitch);
+        self.res.the_player.pos = new_pos;
 
-        if !nw_frames.is_empty() && let Some(channels) = self.res.net.connection.channels() {
-            for (Velocity(velocity), YawPitch(yaw, pitch), origin) in nw_frames {
-                //println!("Moved {} units in NW tick", velocity.length());
-                let mut payload = [0u8; 17];
-
-                let mut writer = ByteWriter::new_for_message(&mut payload);
-                let has_velocity = velocity.length_squared() != 0.0;
-                let has_rotation = vec2(yaw, pitch).length_squared() != 0.0;
-
-                if !has_velocity && !has_rotation {
-                    continue;
-                }
-
-                writer.write_u32(self.tick);
-                //println!("Delta for tick {}: {:.8}, {:.8}, {:.8}, pos {:.8}, {:.8}, {:.8}", self.tick, velocity.x, velocity.y, velocity.z, origin.x, origin.y, origin.z);
-                self.tick += 1;
-                writer.write_u8((has_velocity as u8) | ((has_rotation as u8) << 1));
-
-                if has_velocity {
-                    //println!("Moved {} units in nw frame", velocity.length());
-                    writer.write_u16(encode_velocity(velocity.x) as u16);
-                    writer.write_u16(encode_velocity(velocity.y) as u16);
-                    writer.write_u16(encode_velocity(velocity.z) as u16);
-                }
-                if has_rotation {
-                    //println!("Rot delta for tick {}: {:.8}, {:.8}, rot: {:.8}, {:.8}", self.tick, yaw.to_degrees(), pitch.to_degrees(), origin.x.to_degrees(), origin.y.to_degrees());
-                    writer.write_u16(encode_angle_rad(shared::protocol::wrap_angle(yaw)) as u16);
-                    writer.write_u16(encode_angle_rad(shared::protocol::wrap_angle(pitch)) as u16);
-                }
-
-                writer.write_message_len();
-
-                if let Err(e) = channels.player_state.send(writer.bytes().into()) {
-                    eprintln!("Error sending position data (channel closed?): {e}");
-                }
+        let predictions = self.res.input_recorder.predictions();
+        if self.is_network_tick && !predictions.is_empty() && let Some(channels) = self.res.net.connection.channels() {
+            self.artificial_delay.push(predictions.into(), res.time.ms_u32);
+            
+            if let Some(msg) = self.artificial_delay.pop(res.time.ms_u32, 300) {
+                // Wrong place to handle the network thread crashing down, ignore result
+                let _ = channels.player_state.send(msg);
+                self.packets_sent += 1;
             }
         }
         camera.update();
@@ -389,6 +398,12 @@ impl GameState {
         hud!("Z: {:.8}", self.res.camera.pos().z);
         hud!("Yaw: {:.3}", self.res.camera.yaw().to_degrees());
         hud!("Pitch: {:.3}", self.res.camera.pitch().to_degrees());
+        hud!("Packets lost/total: {}/{} ({:.2})", 
+            self.packets_lost, 
+            self.packets_sent, 
+            self.packets_lost as f32 / self.packets_sent as f32
+        );
+        hud!("Ping: {}ms", self.ping);
     }
 
     fn draw_crosshair(ui: &mut UiRenderer, win_size: &WindowSize) {
@@ -462,8 +477,8 @@ impl GameState {
 
                 self.res
                     .entities
-                    .query::<(&OldPosition, &Position, &HeadRotation)>()
-                    .iter()
+                    .query_mut::<(&OldPosition, &Position, &HeadRotation)>()
+                    .into_iter()
                     .for_each(|(_, (old_pos, new_pos, rot))| {
                         let pv = self.res.camera.proj_view_matrix()
                             * Mat4::from_translation((new_pos.0 - old_pos.0) * t + old_pos.0)
@@ -563,7 +578,6 @@ impl GameState {
         };
 
         Self {
-            tick: 0,
             res: game_state::Resources {
                 username,
                 chat: Chat::new(res.window_size.extent.width as _),
@@ -585,6 +599,12 @@ impl GameState {
                 the_player: ThePlayer::new(login.position),
                 chunk_renderer: ChunkRenderer::new(),
             },
+            jitter_buf: JitterPrevention::new(),
+            artificial_delay: JitterPrevention::new(),
+            is_network_tick: false,
+            packets_lost: 0,
+            packets_sent: 0,
+            ping: 0,
             mouse_move_accumulator: Vec2::ZERO,
             grid_vbo: VertexBuffer {
                 buffer: Buffer::null(),

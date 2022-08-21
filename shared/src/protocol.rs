@@ -1,6 +1,6 @@
 use std::f32::consts::{PI, TAU};
 
-use glam::Vec2;
+use glam::{Vec2, Vec3, vec3, vec2};
 
 pub const PROTOCOL_VERSION: u16 = 0;
 pub const PROTOCOL_MAGIC: u16 = 0xB7C1;
@@ -77,7 +77,7 @@ pub fn decode_angle_rad(encoded: u16) -> f32 {
 }
 
 pub fn encode_velocity(coord: f32) -> u32 {
-    let signed = (coord * 2048.0).round() as i32 + 32768;
+    let signed = ((coord * 2048.0).round() as i32).clamp(-32768, 32767) + 32768;
     if signed < 0 {
         return 0;
     }
@@ -86,6 +86,20 @@ pub fn encode_velocity(coord: f32) -> u32 {
 
 pub fn decode_velocity(coord: u32) -> f32 {
     (coord as i32 - 32768) as f32 / 2048.0
+}
+
+pub fn round_velocity(vel: Vec3) -> Vec3 {
+    // Simulates the network compression and decompression
+    let x = decode_velocity(encode_velocity(vel.x));
+    let y = decode_velocity(encode_velocity(vel.y));
+    let z = decode_velocity(encode_velocity(vel.z));
+    vec3(x, y, z)
+}
+
+pub fn round_angles(a: Vec2) -> Vec2 {
+    let yaw = decode_angle_rad(encode_angle_rad(wrap_angle(a.x)));
+    let pitch = decode_angle_rad(encode_angle_rad(wrap_angle(a.y)));
+    vec2(yaw, pitch)
 }
 
 mod tests {

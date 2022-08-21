@@ -39,7 +39,7 @@ pub enum PlayersChanged {
 pub struct Channels {
     pub player_join: UnboundedReceiver<PlayersChanged>,
     pub chat_recv: UnboundedReceiver<(NetworkId, SharedStr)>,
-    pub player_state_recv: UnboundedReceiver<(NetworkId, PlayerStateMsg)>
+    pub player_state_recv: UnboundedReceiver<(NetworkId, u32, PlayerStateMsg)>
 }
 
 pub struct NetHandle {
