@@ -164,7 +164,6 @@ pub(super) mod entity_state {
 pub(super) mod player_state {
     use bytes::Bytes;
     use glam::{Vec3, Vec2};
-    use rand::{thread_rng, RngCore};
     use shared::{bits_and_bytes::BitWriter, protocol::{encode_velocity, encode_angle_rad, wrap_angle}};
 
     use crate::states::game::input_recorder::InputSnapshot;
@@ -178,25 +177,25 @@ pub(super) mod player_state {
     ) -> anyhow::Result<()> {
         let mut buf = [0u8; 260];
 
-        let mut drop_chance = 10;
+        /* let mut drop_chance = 10;
         let mut dropped = 0;
-        let mut total = 0;
+        let mut total = 0; */
         while let Some(message) = messages.recv().await {
             let _ = stats_in.send(S2C::Statistics{ ping: outgoing.rtt().as_millis() as u32 }).await;
 
-            total += 1;
+            /* total += 1;
             if thread_rng().next_u32() % drop_chance == 0 {
-/*                 if drop_chance != 10 {
+                 if drop_chance != 10 {
                     drop_chance = 2;
                 } else {
                     drop_chance += 2;
                 }
                 dropped += 1;
- */                //print!("Dropping {}; ", message.last().unwrap().tag);
+                 //print!("Dropping {}; ", message.last().unwrap().tag);
                 continue;
             } else {
                 //print!("Letting {} through; ", message.last().unwrap().tag);
-            }
+            } */
 
 
             //println!("Dropped {dropped}/{total} ({:.2}%)", dropped as f32 / total as f32 * 100.0);

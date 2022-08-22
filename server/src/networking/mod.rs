@@ -1,4 +1,4 @@
-use std::thread::JoinHandle;
+use std::{thread::JoinHandle, net::SocketAddr};
 
 use anyhow::bail;
 use flexstr::SharedStr;
@@ -57,7 +57,7 @@ impl NetHandle {
     }
 }
 
-pub fn init() -> Result<NetHandle> {
+pub fn init(address: SocketAddr) -> Result<NetHandle> {
     let (player_join_send, player_join_recv) = unbounded_channel();
     let (chat_send, chat_recv) = unbounded_channel();
     let (player_state_send, player_state_recv) = unbounded_channel();
@@ -71,7 +71,7 @@ pub fn init() -> Result<NetHandle> {
 
     let (tx, rx) = oneshot::channel();
     let thread_handle = std::thread::spawn(move || {
-        network_thread::start(tx, channels);
+        network_thread::start(tx, channels, address);
     });
 
     // Don't start loading the server until networking is confirmed to be working

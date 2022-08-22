@@ -8,16 +8,32 @@ pub mod components;
 pub mod net;
 
 use std::{
-    time::{Duration, Instant}, sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant}, sync::atomic::{AtomicBool, Ordering}, net::SocketAddr,
 };
 
 pub fn main() {
-    runner();
-    println!("Server stopped.");
+    if let Some(address) = get_bind_address() {
+        runner(address);
+        println!("Server stopped.");
+    }
 }
 
-fn runner() {
-    let mut state = server::init().unwrap();
+fn get_bind_address() -> Option<SocketAddr> {
+    if let Some(address) = std::env::args().skip(1).next() {
+        match address.parse() {
+            Ok(address) => Some(address),
+            Err(e) => {
+                println!("Invalid bind address '{address}': {e}");
+                None
+            }
+        }
+    } else {
+        Some("0.0.0.0:29477".parse().unwrap())
+    }
+}
+
+pub fn runner(address: SocketAddr) {
+    let mut state = server::init(address).unwrap();
 
     static SHOULD_STOP : AtomicBool = AtomicBool::new(false);
     ctrlc::set_handler(|| {

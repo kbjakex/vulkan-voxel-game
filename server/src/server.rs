@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{time::Instant, net::SocketAddr};
 
 use crate::{resources::{Resources, Time}, net, components::{Position, OldPosition, HeadYawPitch}};
 
@@ -36,11 +36,11 @@ pub fn shutdown(res: Resources) {
     
 }
 
-pub fn init() -> Result<Resources> {
+pub fn init(address: SocketAddr) -> Result<Resources> {
     let now = Instant::now();
 
     Ok(Resources {
-        net: crate::net::init()?,
+        net: crate::net::init(address)?,
         main_world: World::new(),
         time: Time {
             at_launch: now,

@@ -56,7 +56,7 @@ pub struct GameState {
 
     jitter_buf: JitterPrevention<Box<[EntityStateMsg]>>,
 
-    artificial_delay: JitterPrevention<Box<[InputSnapshot]>>,
+    _artificial_delay: JitterPrevention<Box<[InputSnapshot]>>,
 
     is_network_tick: bool,
     packets_lost: u32,
@@ -303,13 +303,8 @@ impl GameState {
                 },
                 EntityStateMsg::InputValidated { tag, packets_lost, server_pos, server_head_rot } => {
                     self.packets_lost += packets_lost as u32;
-                    let prediction_failed = self.res.input_recorder
+                    self.res.input_recorder
                         .process_server_authoritative_state(tag, server_pos, server_head_rot);
-
-                    if prediction_failed {
-                        println!("Prediction failed");
-                        self.res.the_player.vel = Vec3::ZERO;
-                    }
                 }
             }
         }
@@ -367,13 +362,15 @@ impl GameState {
 
         let predictions = self.res.input_recorder.predictions();
         if self.is_network_tick && !predictions.is_empty() && let Some(channels) = self.res.net.connection.channels() {
-            self.artificial_delay.push(predictions.into(), res.time.ms_u32);
-            
+            // Wrong place to handle the network thread crashing down, ignore result
+            let _ = channels.player_state.send(predictions.into());
+            self.packets_sent += 1;
+
+            /* self.artificial_delay.push(predictions.into(), res.time.ms_u32);
             if let Some(msg) = self.artificial_delay.pop(res.time.ms_u32, 300) {
-                // Wrong place to handle the network thread crashing down, ignore result
                 let _ = channels.player_state.send(msg);
                 self.packets_sent += 1;
-            }
+            } */
         }
         camera.update();
     }
@@ -600,7 +597,7 @@ impl GameState {
                 chunk_renderer: ChunkRenderer::new(),
             },
             jitter_buf: JitterPrevention::new(),
-            artificial_delay: JitterPrevention::new(),
+            _artificial_delay: JitterPrevention::new(),
             is_network_tick: false,
             packets_lost: 0,
             packets_sent: 0,

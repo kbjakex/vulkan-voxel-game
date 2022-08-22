@@ -1,4 +1,4 @@
-use std::collections::BinaryHeap;
+use std::{collections::BinaryHeap, net::SocketAddr};
 
 use bevy_utils::HashSet;
 use flexstr::SharedStr;
@@ -353,9 +353,9 @@ pub struct PlayerChannels {
     pub entity_state: UnboundedSender<EntityStateOut>,
 }
 
-pub fn init() -> Result<Network> {
+pub fn init(address: SocketAddr) -> Result<Network> {
     Ok(Network {
-        handle: crate::networking::init()?,
+        handle: crate::networking::init(address)?,
         entity_mapping: NidEntityMapping::with_capacity(128),
         network_id_allocator: IdAllocator::with_capacity(128),
         player_id_allocator: IdAllocator::with_capacity(8),

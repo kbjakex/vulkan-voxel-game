@@ -43,12 +43,12 @@ impl State for UsernameQueryState {
         res.renderer
             .set_present_mode(vk::PresentModeKHR::FIFO_KHR)?; // strong vsync
 
-        let text = res.renderer.ui.text();
+        /* let text = res.renderer.ui.text();
         self.username_box
             .set_contents(&"jetp250".chars().collect::<Vec<char>>(), text, res.time.secs_f32);
         self.address_box
             .set_contents(&"localhost:29477".chars().collect::<Vec<char>>(), text, res.time.secs_f32);
-        self.selected = 2;
+        self.selected = 2; */
 
         Ok(())
     }

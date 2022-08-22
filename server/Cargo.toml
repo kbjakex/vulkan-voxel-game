@@ -6,13 +6,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.61"
+anyhow = "1.0.62"
 crossbeam-channel = "0.5.6"
 smallvec = "1.9.0"
 glam = "0.21.3"
 lz4 = "1.23.3"
 flexstr = "0.9.2"
-ctrlc = "3.2.2"
+ctrlc = "3.2.3"
 
 hecs = { git = "https://github.com/Ralith/hecs" }
 bevy_utils = "0.8.0"

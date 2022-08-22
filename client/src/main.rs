@@ -15,7 +15,7 @@ pub mod text_box;
 pub mod world;
 
 use game::Game;
-use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+//use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use winit::event_loop::EventLoop;
 
 #[global_allocator]

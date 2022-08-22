@@ -33,8 +33,9 @@ pub struct NetSideChannels {
 pub async fn start(
     tx: oneshot::Sender<bool>,
     channels: NetSideChannels,
+    address: SocketAddr
 ) {
-    let incoming = match setup::make_server_endpoint("0.0.0.0:29477".parse().unwrap()) {
+    let incoming = match setup::make_server_endpoint(address) {
         Ok(incoming) => incoming,
         Err(e) => {
             println!("Failed to create server endpoint! Error: {}", e);

@@ -128,13 +128,13 @@ impl InputRecorder {
         tag: u16,
         position: Vec3,
         head_rotation: Vec2,
-    ) -> bool {
+    ) {
         let tag = tag.wrapping_add(1);
 
         let oldest_id = self.input_id.wrapping_sub(self.input_history.len() as u16);
         let to_remove = tag.wrapping_sub(oldest_id);
         if to_remove == 0 || to_remove > self.input_history.len() as u16 {
-            return false;
+            return;
         }
 
         self.input_history.drain(..to_remove as usize);
@@ -154,12 +154,8 @@ impl InputRecorder {
 
         //println!("Pos difference: {}, rot difference: {}", self.integrator.vel_origin.distance(new_pos), self.integrator.angle_origin.distance(new_rotation));
 
-        let failed = !new_pos.abs_diff_eq(self.integrator.vel_origin, 0.005);
-
         self.integrator.angle_origin = new_rotation;
         self.integrator.vel_origin = new_pos;
-
-        failed
     }
 
     pub fn record(
