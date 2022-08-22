@@ -1,3 +1,4 @@
 /target
-/assets/textures
+/assets/textures/*
+!/assets/textures/packed.bin
 Cargo.lock
