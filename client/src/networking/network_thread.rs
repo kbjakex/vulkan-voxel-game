@@ -150,7 +150,7 @@ mod setup {
     use quinn::{ClientConfig, Endpoint};
 
     pub(super) fn make_client_endpoint() -> Result<Endpoint, Box<dyn Error>> {
-        let mut endpoint = Endpoint::client("[::]:0".parse()?)?;
+        let mut endpoint = Endpoint::client("0.0.0.0:0".parse()?)?;
         let crypto = rustls::ClientConfig::builder()
             .with_safe_defaults()
             .with_custom_certificate_verifier(Arc::new(SkipServerVerification))

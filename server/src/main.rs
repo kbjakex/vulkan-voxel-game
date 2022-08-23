@@ -35,6 +35,8 @@ fn get_bind_address() -> Option<SocketAddr> {
 pub fn runner(address: SocketAddr) {
     let mut state = server::init(address).unwrap();
 
+    println!("Server running @ {}Hz tick rate", shared::TICKS_PER_SECOND);
+
     static SHOULD_STOP : AtomicBool = AtomicBool::new(false);
     ctrlc::set_handler(|| {
         println!();

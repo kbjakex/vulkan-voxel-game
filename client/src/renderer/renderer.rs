@@ -13,7 +13,7 @@ use super::{
 };
 
 pub const FRAMES_IN_FLIGHT: u32 = 2;
-pub const VALIDATION: Validation = Validation::EnabledWithDefaults;
+pub const VALIDATION: Validation = Validation::Disabled;
 pub const PRESENT_MODE: vk::PresentModeKHR = vk::PresentModeKHR::MAILBOX_KHR;
 
 pub struct RendererState {

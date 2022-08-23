@@ -157,6 +157,8 @@ impl Game {
 // Initialization
 impl Game {
     pub fn init(event_loop: &EventLoop<()>) -> anyhow::Result<Self> {
+        println!("Starting game @ {}Hz tick rate", shared::TICKS_PER_SECOND);
+
         let fullscreen_size = event_loop.primary_monitor().unwrap().size();
         let fullscreen_size =
             fullscreen_size.to_logical(event_loop.primary_monitor().unwrap().scale_factor());
