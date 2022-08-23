@@ -347,6 +347,8 @@ impl GameState {
     fn update_camera(&mut self, res: &mut Resources) {
         let camera = &mut self.res.camera;
 
+
+
         let mouse_speed = res.input.settings.mouse_sensitivity * 0.0025;
         let mouse_motion = self.mouse_move_accumulator * mouse_speed;
         self.mouse_move_accumulator = Vec2::ZERO;
@@ -389,10 +391,10 @@ impl GameState {
             };
         }
 
-        hud!("FPS: {:.4}", res.metrics.frame_time.avg_fps);
-        hud!("X: {:.8}", self.res.camera.pos().x);
-        hud!("Y: {:.8}", self.res.camera.pos().y);
-        hud!("Z: {:.8}", self.res.camera.pos().z);
+        hud!("FPS: {:.1}", res.metrics.frame_time.avg_fps);
+        hud!("X: {:.4}", self.res.camera.pos().x);
+        hud!("Y: {:.4}", self.res.camera.pos().y);
+        hud!("Z: {:.4}", self.res.camera.pos().z);
         hud!("Yaw: {:.3}", self.res.camera.yaw().to_degrees());
         hud!("Pitch: {:.3}", self.res.camera.pitch().to_degrees());
         hud!("Packets lost/total: {}/{} ({:.2})", 

@@ -42,6 +42,8 @@ pub struct Network {
     entity_trackers: Vec<Option<EntityStateTracker>>,
 
     entity_state_buf: Vec<(NetworkId, EntityStateMsg)>,
+
+    removed_entities: Vec<(Entity, NetworkId)>,
 }
 
 impl Network {
@@ -54,7 +56,9 @@ impl Network {
     }
 
     pub fn track_entity_remove(&mut self, nid: NetworkId) -> anyhow::Result<Entity> {
-        self.entity_mapping.remove_mapping(nid)
+        let entity = self.entity_mapping.remove_mapping(nid)?;
+        self.removed_entities.push((entity, nid));
+        Ok(entity)
     }
 
     pub fn broadcast_chat(&mut self, message: SharedStr) {
@@ -82,6 +86,8 @@ pub fn tick(res: &mut Resources) -> anyhow::Result<()> {
     // - send entity data update message for each currently visible entity
     update_entity_trackers(res);
 
+    res.net.removed_entities.clear();
+
     Ok(())
 }
 
@@ -94,9 +100,6 @@ fn process_player_state(res: &mut Resources) {
         };
         let entity = res.main_world.entity(entity).unwrap();
         if let Some(tracker) = net.entity_trackers[entity.get::<&PlayerId>().unwrap().raw() as usize].as_mut() { 
-/*             tracker.last_player_input_tag = Some(msg.tag);
-            tracker.packets_lost = tracker.packets_lost.wrapping_add(packet_loss as u8);
- */            
             tracker.input_queue.push(entry, res.time.ms_u32);
         }
     }
@@ -123,28 +126,6 @@ fn process_player_state(res: &mut Resources) {
             head_rotation.value += delta;
             head_rotation.delta += delta;
         }
-/*         let Some(entity) = net.entity_mapping.get(nid) else {
-            continue; // Fine: might have just disconnected
-        };
-        let entity = res.main_world.entity(entity).unwrap();
-
-        if let Some(tracker) = net.entity_trackers[entity.get::<&PlayerId>().unwrap().raw() as usize].as_mut() {
-        }
-
-        if let Some(delta) = msg.delta_pos {
-            let mut pos = entity.get::<&mut Position>().unwrap();
-            pos.0 += delta;
-            //println!("Pos @ {}: {:.8}, {:.8}, {:.8}", msg.tag, o.x, o.y, o.z);
-            //println!("Delta for tick {}: {:.8}, {:.8}, {:.8}, pos {:.8}, {:.8}, {:.8}", msg.tick, delta.x, delta.y, delta.z, pos.0.x, pos.0.y, pos.0.z);
-        }
-
-        if let Some(delta) = msg.delta_yaw_pitch {
-            let mut rot = entity.get::<&mut HeadYawPitch>().unwrap();
-            rot.value += delta;
-            rot.delta += delta;
-
-            //println!("Rot delta for tick {}: {:.8}, {:.8}, rot: {:.8}, {:.8}", msg.tick, delta.x.to_degrees(), delta.y.to_degrees(), rot.0.x.to_degrees(), rot.0.y.to_degrees());
-        } */
     }
 }
 
@@ -182,6 +163,12 @@ fn update_entity_trackers(res: &mut Resources) {
                     delta_pos: position - old_position, 
                     delta_head_rotation: head_rotation.delta 
                 }));
+            }
+        }
+
+        for &(entity, id) in &res.net.removed_entities {
+            if tracker.entities.remove(&entity) {
+                buf.push((id, EntityStateMsg::EntityRemoved));
             }
         }
 
@@ -399,5 +386,6 @@ pub fn init(address: SocketAddr) -> Result<Network> {
         },
         entity_trackers: vec![None],
         entity_state_buf: Vec::new(),
+        removed_entities: Vec::new(),
     })
 }
