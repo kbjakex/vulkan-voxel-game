@@ -4,14 +4,14 @@ use bevy_utils::HashSet;
 use flexstr::SharedStr;
 use glam::Vec3;
 use hecs::Entity;
-use shared::{protocol::{NetworkId, RawNetworkId}, bits_and_bytes::ByteWriter};
+use shared::{protocol::{NetworkId, RawNetworkId}, bits_and_bytes::ByteWriter, jitter_prevention::JitterPrevention};
 use tokio::sync::mpsc::UnboundedSender;
 
 use anyhow::Result;
 
 use crate::{
     components::{OldPosition, Position, HeadYawPitch, self, PlayerBundle, YawPitch, Username, PlayerId},
-    networking::{NetHandle, PlayersChanged, LoginResponse, client_connection::entity_state::{EntityStateMsg, EntityStateOut}},
+    networking::{NetHandle, PlayersChanged, LoginResponse, client_connection::entity_state::{EntityStateMsg, EntityStateOut}, network_thread::PlayerStateMsg},
     resources::Resources,
 };
 
@@ -23,6 +23,8 @@ struct EntityStateTracker {
     player_entity: Entity,
     entities: HashSet<Entity>,
     entity_state_channel: UnboundedSender<EntityStateOut>,
+
+    input_queue: JitterPrevention<(NetworkId, u32, PlayerStateMsg)>,
 
     last_player_input_tag: Option<u16>,
     packets_lost: u8,
@@ -86,15 +88,47 @@ pub fn tick(res: &mut Resources) -> anyhow::Result<()> {
 fn process_player_state(res: &mut Resources) {
     let net = &mut res.net;
     let handle = &mut net.handle;
-    while let Ok((nid, packet_loss, msg)) = handle.channels.player_state_recv.try_recv() {
-        let Some(entity) = net.entity_mapping.get(nid) else {
+    while let Ok(entry) = handle.channels.player_state_recv.try_recv() {
+        let Some(entity) = net.entity_mapping.get(entry.0) else {
+            continue; // Fine: might have just disconnected
+        };
+        let entity = res.main_world.entity(entity).unwrap();
+        if let Some(tracker) = net.entity_trackers[entity.get::<&PlayerId>().unwrap().raw() as usize].as_mut() { 
+/*             tracker.last_player_input_tag = Some(msg.tag);
+            tracker.packets_lost = tracker.packets_lost.wrapping_add(packet_loss as u8);
+ */            
+            tracker.input_queue.push(entry, res.time.ms_u32);
+        }
+    }
+
+    for (_, (id, Position(position), head_rotation)) 
+        in res.main_world.query_mut::<(&PlayerId, &mut Position, &mut HeadYawPitch)>() {
+
+        let Some(tracker) = net.entity_trackers[id.raw() as usize].as_mut() else {
+            continue;
+        };
+
+        let Some((_, packet_loss, msg)) = tracker.input_queue.pop(res.time.ms_u32, 20) else {
+            continue;
+        };
+
+        tracker.last_player_input_tag = Some(msg.tag);
+        tracker.packets_lost = tracker.packets_lost.wrapping_add(packet_loss as u8);
+
+        if let Some(delta) = msg.delta_pos {
+            *position += delta;
+        }
+
+        if let Some(delta) = msg.delta_yaw_pitch {
+            head_rotation.value += delta;
+            head_rotation.delta += delta;
+        }
+/*         let Some(entity) = net.entity_mapping.get(nid) else {
             continue; // Fine: might have just disconnected
         };
         let entity = res.main_world.entity(entity).unwrap();
 
         if let Some(tracker) = net.entity_trackers[entity.get::<&PlayerId>().unwrap().raw() as usize].as_mut() {
-            tracker.last_player_input_tag = Some(msg.tag);
-            tracker.packets_lost = tracker.packets_lost.wrapping_add(packet_loss as u8);
         }
 
         if let Some(delta) = msg.delta_pos {
@@ -110,7 +144,7 @@ fn process_player_state(res: &mut Resources) {
             rot.delta += delta;
 
             //println!("Rot delta for tick {}: {:.8}, {:.8}, rot: {:.8}, {:.8}", msg.tick, delta.x.to_degrees(), delta.y.to_degrees(), rot.0.x.to_degrees(), rot.0.y.to_degrees());
-        }
+        } */
     }
 }
 
@@ -219,6 +253,7 @@ fn poll_joins(res: &mut Resources) -> anyhow::Result<()> {
                     player_entity: entity,
                     entities: HashSet::new(),
                     entity_state_channel: channels.entity_state,
+                    input_queue: JitterPrevention::new(),
                     last_player_input_tag: None,
                     packets_lost: 0
                 }));
